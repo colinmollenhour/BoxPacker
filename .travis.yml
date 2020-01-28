@@ -26,8 +26,12 @@ cache:
     - $HOME/.composer/cache
     - $HOME/.cache/composer
 
-install:
+before_install:
   - phpenv config-rm xdebug.ini || true;
+  - phpenv config-add travis-php.ini;
+  - php -m;
+
+install:
   - composer validate --strict;
   - |
     sed -i 's/"bin-compat" : "full"/"bin-compat" : "auto"/g' composer.json;
