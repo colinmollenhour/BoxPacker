@@ -1,6 +1,7 @@
 # Changelog
 
 ## [4.x - Unreleased] - 2026-xx-xx
+## [4.3.0] - 2026-08-09
 ### Changed
 - Improved efficiency in packing
 
@@ -598,8 +599,9 @@ Initial release
  - Experimental code to get a feel for how calculations can best be implemented
  - Only works if all items fit into a single box (so not production ready at all)
 
-[4.x - Unreleased]: https://github.com/dvdoug/BoxPacker/compare/4.2.0..master
+[4.x - Unreleased]: https://github.com/dvdoug/BoxPacker/compare/4.3.0..master
 
+[4.3.0]: https://github.com/dvdoug/BoxPacker/compare/4.2.0..4.3.0
 [4.2.0]: https://github.com/dvdoug/BoxPacker/compare/4.1.1..4.2.0
 [4.1.1]: https://github.com/dvdoug/BoxPacker/compare/4.1.0..4.1.1
 [4.1.0]: https://github.com/dvdoug/BoxPacker/compare/4.0.1..4.1.0
