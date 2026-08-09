@@ -299,33 +299,55 @@ class OrientatedItemFactory implements LoggerAwareInterface
     }
 
     /**
-     * @return array<array<int>>
+     * @return list<array{0: int, 1: int, 2: int}>
      */
     private function generatePermutations(Item $item, ?OrientatedItem $prevItem): array
     {
         // Special case items that are the same as what we just packed - keep orientation
-        if ($prevItem && $prevItem->isSameDimensions($item)) {
+        if ($prevItem !== null && $prevItem->isSameDimensions($item)) {
             return [[$prevItem->width, $prevItem->length, $prevItem->depth]];
         }
 
-        $permutations = [];
         $w = $item->getWidth();
         $l = $item->getLength();
         $d = $item->getDepth();
+        $rotation = $item->getAllowedRotation();
 
-        $permutations[$w . '|' . $l . '|' . $d] = [$w, $l, $d];
-
-        if ($item->getAllowedRotation() !== Rotation::Never) { // simple 2D rotation
-            $permutations[$l . '|' . $w . '|' . $d] = [$l, $w, $d];
+        if ($rotation === Rotation::Never) {
+            return [[$w, $l, $d]];
         }
 
-        if ($item->getAllowedRotation() === Rotation::BestFit) { // add 3D rotation if we're allowed
-            $permutations[$w . '|' . $d . '|' . $l] = [$w, $d, $l];
-            $permutations[$l . '|' . $d . '|' . $w] = [$l, $d, $w];
-            $permutations[$d . '|' . $w . '|' . $l] = [$d, $w, $l];
-            $permutations[$d . '|' . $l . '|' . $w] = [$d, $l, $w];
+        if ($rotation === Rotation::KeepFlat) {
+            return $w === $l
+                ? [[$w, $l, $d]]
+                : [[$w, $l, $d], [$l, $w, $d]];
         }
 
-        return $permutations;
+        // BestFit: one placement per distinct assignment of edges to axes
+        if ($w !== $l && $l !== $d && $w !== $d) {
+            return [
+                [$w, $l, $d],
+                [$l, $w, $d],
+                [$w, $d, $l],
+                [$l, $d, $w],
+                [$d, $w, $l],
+                [$d, $l, $w],
+            ];
+        }
+
+        if ($w === $l && $l === $d) {
+            return [[$w, $l, $d]];
+        }
+
+        if ($w === $l) {
+            return [[$w, $l, $d], [$w, $d, $l], [$d, $w, $l]];
+        }
+
+        if ($w === $d) {
+            return [[$w, $l, $d], [$l, $w, $d], [$w, $d, $l]];
+        }
+
+        // $l === $d
+        return [[$w, $l, $d], [$l, $w, $d], [$l, $d, $w]];
     }
 }
