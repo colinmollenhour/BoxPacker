@@ -16,6 +16,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
+use function count;
 use function explode;
 use function fclose;
 use function feof;
@@ -33,12 +34,14 @@ use function trim;
  * Of note, is that academia always attempts an actual-best fit packing, which is contrary to the
  * design goal of this library which is to simulate how a human does packing arrangements.
  *
- * Also of note, is that these tests are designed to exercise an algorithm that fits the most number of
- * packages into a single box, whereas BoxPacker is designed to use multiple boxes because in real life
- * you want all of your stuff packed, not just some of it. Therefore the output of these tests are not
+ * Also of note, is that the Loh/Nee and Bischoff tests exercise an algorithm that fits the most
+ * volume into a single box, whereas BoxPacker is designed to use multiple boxes because in real life
+ * you want all of your stuff packed, not just some of it. Therefore those outputs are not
  * representative of real BoxPacker output, as BoxPacker is designed to distribute packages as evenly as
  * possible between boxes, instead of e.g. cramming one to the top and having a second box mostly empty.
  *
+ * Ivancic / thpack9 is the exception: a multiple-container problem whose published score is the
+ * number of identical containers needed to ship the entire consignment (not volume utilisation).
  * Test data taken from the OR Library http://people.brunel.ac.uk/~mastjjb/jeb/orlib/thpackinfo.html
  *
  * OR placement constraint (Bischoff/Ratcliff et al.): each item edge has a flag for whether
@@ -52,6 +55,8 @@ class PublishedTestCasesTest extends TestCase
 {
     protected static $expectedResults = [];
 
+    protected static $expectedContainerCounts = [];
+
     public static function setUpBeforeClass(): void
     {
         ini_set('memory_limit', '-1');
@@ -61,6 +66,15 @@ class PublishedTestCasesTest extends TestCase
             $data = fgetcsv($fp, escape: '');
             if (is_array($data)) {
                 self::$expectedResults[$data[0]] = $data[1];
+            }
+        }
+        fclose($fp);
+
+        $fp = fopen(__DIR__ . '/data/thpack9-expected.csv', 'rb');
+        while (!feof($fp)) {
+            $data = fgetcsv($fp, escape: '');
+            if (is_array($data)) {
+                self::$expectedContainerCounts[$data[0]] = (int) $data[1];
             }
         }
         fclose($fp);
@@ -115,6 +129,34 @@ class PublishedTestCasesTest extends TestCase
         return $data;
     }
 
+    /**
+     * N. Ivancic, K. Mathur & B.B. Mohanty, "An integer-programming
+     *  based heuristic approach to the three-dimensional packing problem",
+     *  J. of Manuf. & Ops. Man., vol. 2, (1989).
+     *
+     * Multiple identical containers; minimise the number required to pack
+     * every item. Expectations are container counts, not volume %.
+     *
+     */
+    #[DataProvider('ivancicData')]
+    #[Group('efficiency')]
+    public function testIvancic($problem, $box, $items): void
+    {
+        self::runIvancicTestcase($problem, $box, $items);
+    }
+
+    public static function ivancicData(): array
+    {
+        $data = [];
+        $fileData = self::thpackDecode('thpack9.txt');
+        foreach ($fileData as &$problem) {
+            $problem[0] = "Ivancic #{$problem[0]}";
+            $data[$problem[0]] = [$problem[0], $problem[1], $problem[2]];
+        }
+
+        return $data;
+    }
+
     public static function runPublishedTestcase($problem, Box $box, ItemList $items): void
     {
         $packer = new VolumePacker($box, $items);
@@ -123,6 +165,25 @@ class PublishedTestCasesTest extends TestCase
         $volumeUtilisation = $packedBox->getVolumeUtilisation();
 
         self::assertEquals(self::$expectedResults[$problem], $volumeUtilisation);
+    }
+
+    public static function runIvancicTestcase($problem, Box $box, ItemList $items): void
+    {
+        $itemCount = $items->count();
+
+        $packer = new Packer();
+        $packer->setMaxBoxesToBalanceWeight(0);
+        $packer->addBox($box);
+        $packer->setItems($items);
+        $packedBoxes = $packer->pack();
+
+        $packedItemCount = 0;
+        foreach ($packedBoxes as $packedBox) {
+            $packedItemCount += $packedBox->items->count();
+        }
+
+        self::assertSame($itemCount, $packedItemCount, "{$problem} left items unpacked");
+        self::assertSame(self::$expectedContainerCounts[$problem], $packedBoxes->count());
     }
 
     protected static function thpackDecode($filename): array
