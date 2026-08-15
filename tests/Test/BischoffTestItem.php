@@ -13,12 +13,12 @@ use DVDoug\BoxPacker\Item;
 use DVDoug\BoxPacker\Rotation;
 
 /**
- * Plain OR-library item (no placement hook).
+ * Bischoff/Ratcliff item (no placement hook).
  *
- * Vertical restrictions that reduce to {@see Rotation::KeepFlat} or unrestricted
+ * Vertical-edge flags that reduce to {@see Rotation::KeepFlat} or unrestricted
  * {@see Rotation::BestFit} are expressed here via dimensions + rotation only.
  */
-class THPackTestItem implements Item
+class BischoffTestItem implements Item
 {
     public function __construct(
         private readonly string $description,

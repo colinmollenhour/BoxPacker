@@ -14,12 +14,12 @@ use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\Rotation;
 
 /**
- * OR-library item where a non-trivial subset of edges may be used as the vertical axis.
+ * Bischoff/Ratcliff item where a non-trivial subset of edges may be used as the vertical axis.
  *
  * Use only when the restriction cannot be expressed as {@see Rotation::KeepFlat} or free BestFit
  * (i.e. exactly two of the three edges may stand vertical).
  */
-class THPackConstrainedTestItem extends THPackTestItem implements ConstrainedPlacementItem
+class BischoffConstrainedTestItem extends BischoffTestItem implements ConstrainedPlacementItem
 {
     public function __construct(
         string $description,

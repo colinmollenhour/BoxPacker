@@ -10,7 +10,7 @@ declare(strict_types=1);
 namespace DVDoug\BoxPacker;
 
 use DVDoug\BoxPacker\Test\TestItem;
-use DVDoug\BoxPacker\Test\THPackTestItem;
+use DVDoug\BoxPacker\Test\BischoffTestItem;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -36,7 +36,7 @@ class PackedItemTest extends TestCase
 
     public function testJsonSerializeWithItemSupportingNotSupportingJsonSerialize(): void
     {
-        $item = new THPackTestItem('Item', 1, 2, 3, Rotation::BestFit);
+        $item = new BischoffTestItem('Item', 1, 2, 3, Rotation::BestFit);
         $packedItem = new PackedItem($item, 100, 20, 300, 3, 5, 7);
         self::assertJsonStringEqualsJsonString('{"x":100,"y":20,"z":300,"width":3,"length":5,"depth":7,"item":{"description":"Item","width":1,"length":2,"depth":3,"allowedRotation":6}}', json_encode($packedItem));
     }

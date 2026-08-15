@@ -10,8 +10,8 @@ declare(strict_types=1);
 namespace DVDoug\BoxPacker;
 
 use DVDoug\BoxPacker\Test\TestBox;
-use DVDoug\BoxPacker\Test\THPackConstrainedTestItem;
-use DVDoug\BoxPacker\Test\THPackTestItem;
+use DVDoug\BoxPacker\Test\BischoffConstrainedTestItem;
+use DVDoug\BoxPacker\Test\BischoffTestItem;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
@@ -40,16 +40,14 @@ use function trim;
  * representative of real BoxPacker output, as BoxPacker is designed to distribute packages as evenly as
  * possible between boxes, instead of e.g. cramming one to the top and having a second box mostly empty.
  *
- * Ivancic / thpack9 is the exception: a multiple-container problem whose published score is the
+ * Ivancic is the exception: a multiple-container problem whose published score is the
  * number of identical containers needed to ship the entire consignment (not volume utilisation).
- * Test data taken from the OR Library http://people.brunel.ac.uk/~mastjjb/jeb/orlib/thpackinfo.html
- *
- * OR placement constraint (Bischoff/Ratcliff et al.): each item edge has a flag for whether
+ * Instance files use the Bischoff/Ratcliff encoding: each item edge has a flag for whether
  * that edge may be used as the vertical (height) axis. Horizontal 90° turns of the other two
  * edges are always allowed. That maps to BoxPacker as:
- * - all three flags true → free {@see Rotation::BestFit} ({@see THPackTestItem})
+ * - all three flags true → free {@see Rotation::BestFit} ({@see BischoffTestItem})
  * - exactly one flag true → {@see Rotation::KeepFlat} with that edge stored as depth
- * - exactly two flags true → {@see THPackConstrainedTestItem} (BestFit + canBePacked)
+ * - exactly two flags true → {@see BischoffConstrainedTestItem} (BestFit + canBePacked)
  */
 class PublishedTestCasesTest extends TestCase
 {
@@ -61,7 +59,7 @@ class PublishedTestCasesTest extends TestCase
     {
         ini_set('memory_limit', '-1');
 
-        $fp = fopen(__DIR__ . '/data/thpack-expected.csv', 'rb');
+        $fp = fopen(__DIR__ . '/data/published-expected.csv', 'rb');
         while (!feof($fp)) {
             $data = fgetcsv($fp, escape: '');
             if (is_array($data)) {
@@ -70,7 +68,7 @@ class PublishedTestCasesTest extends TestCase
         }
         fclose($fp);
 
-        $fp = fopen(__DIR__ . '/data/thpack9-expected.csv', 'rb');
+        $fp = fopen(__DIR__ . '/data/ivancic-expected.csv', 'rb');
         while (!feof($fp)) {
             $data = fgetcsv($fp, escape: '');
             if (is_array($data)) {
@@ -94,7 +92,7 @@ class PublishedTestCasesTest extends TestCase
     public static function lohAndNeeData(): array
     {
         $data = [];
-        $fileData = self::thpackDecode('thpack8.txt');
+        $fileData = self::decodeInstanceFile('loh-nee.txt');
         foreach ($fileData as &$problem) {
             $problem[0] = "Loh and Nee #{$problem[0]}";
             $data[$problem[0]] = [$problem[0], $problem[1], $problem[2]];
@@ -105,7 +103,9 @@ class PublishedTestCasesTest extends TestCase
 
     /**
      * E.E. Bischoff and M.S.W. Ratcliff, "Issues in the development of
-     *  Approaches to Container Loading", OMEGA, vol.23, no.4, (1995).
+     *  Approaches to Container Loading", OMEGA, vol.23, no.4, (1995) (BR1–7).
+     * A.P. Davies and E.E. Bischoff, "Weight distribution considerations
+     *  in container loading", EJOR, vol.114, (1999) (BR8–15).
      */
     #[DataProvider('bischoffData')]
     #[Group('efficiency')]
@@ -118,8 +118,8 @@ class PublishedTestCasesTest extends TestCase
     {
         $data = [];
 
-        for ($i = 1; $i <= 7; ++$i) {
-            $fileData = self::thpackDecode("thpack{$i}.txt");
+        for ($i = 1; $i <= 15; ++$i) {
+            $fileData = self::decodeInstanceFile("br{$i}.txt");
             foreach ($fileData as &$problem) {
                 $problem[0] = "Bischoff #{$problem[3]}-{$problem[0]}";
                 $data[$problem[0]] = [$problem[0], $problem[1], $problem[2]];
@@ -148,7 +148,7 @@ class PublishedTestCasesTest extends TestCase
     public static function ivancicData(): array
     {
         $data = [];
-        $fileData = self::thpackDecode('thpack9.txt');
+        $fileData = self::decodeInstanceFile('ivancic.txt');
         foreach ($fileData as &$problem) {
             $problem[0] = "Ivancic #{$problem[0]}";
             $data[$problem[0]] = [$problem[0], $problem[1], $problem[2]];
@@ -186,7 +186,7 @@ class PublishedTestCasesTest extends TestCase
         self::assertSame(self::$expectedContainerCounts[$problem], $packedBoxes->count());
     }
 
-    protected static function thpackDecode($filename): array
+    protected static function decodeInstanceFile($filename): array
     {
         $data = [];
 
@@ -212,7 +212,7 @@ class PublishedTestCasesTest extends TestCase
             $items = new ItemList();
             for ($i = 1; $i <= $itemTypeCount; ++$i) {
                 $itemDimensions = explode(' ', trim(fgets($handle)));
-                $item = self::createThpackItem(
+                $item = self::createBischoffItem(
                     "Item {$itemDimensions[0]}",
                     (int) $itemDimensions[1],
                     (bool) $itemDimensions[2],
@@ -232,9 +232,9 @@ class PublishedTestCasesTest extends TestCase
     }
 
     /**
-     * Build a fixture item from OR-library dimensions + vertical-edge flags.
+     * Build a fixture item from Bischoff/Ratcliff dimensions + vertical-edge flags.
      */
-    public static function createThpackItem(
+    public static function createBischoffItem(
         string $description,
         int $width,
         bool $widthAllowedVertical,
@@ -247,24 +247,24 @@ class PublishedTestCasesTest extends TestCase
 
         // Unrestricted: any edge may stand vertical → free BestFit
         if ($verticalAxes === 3) {
-            return new THPackTestItem($description, $width, $length, $depth, Rotation::BestFit);
+            return new BischoffTestItem($description, $width, $length, $depth, Rotation::BestFit);
         }
 
         // Single allowed vertical edge → KeepFlat with that edge as depth (planar swap of the other two)
         if ($verticalAxes === 1) {
             if ($depthAllowedVertical) {
-                return new THPackTestItem($description, $width, $length, $depth, Rotation::KeepFlat);
+                return new BischoffTestItem($description, $width, $length, $depth, Rotation::KeepFlat);
             }
             if ($widthAllowedVertical) {
-                return new THPackTestItem($description, $length, $depth, $width, Rotation::KeepFlat);
+                return new BischoffTestItem($description, $length, $depth, $width, Rotation::KeepFlat);
             }
 
             // lengthAllowedVertical
-            return new THPackTestItem($description, $width, $depth, $length, Rotation::KeepFlat);
+            return new BischoffTestItem($description, $width, $depth, $length, Rotation::KeepFlat);
         }
 
         // Two (or zero) allowed vertical edges — cannot express with Rotation alone
-        return new THPackConstrainedTestItem(
+        return new BischoffConstrainedTestItem(
             $description,
             $width,
             $widthAllowedVertical,
