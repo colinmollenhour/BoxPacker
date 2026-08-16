@@ -40,6 +40,12 @@ use function trim;
  * representative of real BoxPacker output, as BoxPacker is designed to distribute packages as evenly as
  * possible between boxes, instead of e.g. cramming one to the top and having a second box mostly empty.
  *
+ * VolumePacker picks the biggest item that fits, not the subset that fills the box
+ * best. Packing a large A can crowd out three smaller B’s that use the space more
+ * densely. Loh/Nee and Bischoff therefore use
+ * VolumePacker::packBestSubset(). Ivancic does not: it is
+ * pack-everything, minimise container count.
+ *
  * Ivancic is the exception: a multiple-container problem whose published score is the
  * number of identical containers needed to ship the entire consignment (not volume utilisation).
  * Instance files use the Bischoff/Ratcliff encoding: each item edge has a flag for whether
@@ -160,8 +166,7 @@ class PublishedTestCasesTest extends TestCase
     public static function runPublishedTestcase($problem, Box $box, ItemList $items): void
     {
         $packer = new VolumePacker($box, $items);
-        $packedBox = $packer->pack();
-
+        $packedBox = $packer->packBestSubset();
         $volumeUtilisation = $packedBox->getVolumeUtilisation();
 
         self::assertEquals(self::$expectedResults[$problem], $volumeUtilisation);

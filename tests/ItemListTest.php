@@ -85,6 +85,18 @@ class ItemListTest extends TestCase
         self::assertCount(2, $itemList);
     }
 
+    public function testGetVolume(): void
+    {
+        $itemList = new ItemList();
+        self::assertSame(0, $itemList->getVolume());
+
+        $itemList->insert(new TestItem('Item A', 20, 20, 2, 100, Rotation::BestFit));
+        self::assertSame(800, $itemList->getVolume());
+
+        $itemList->insert(new TestItem('Item B', 10, 10, 10, 100, Rotation::BestFit), 2);
+        self::assertSame(2800, $itemList->getVolume());
+    }
+
     /**
      * Test we can peek at the "top" (next) item in the list.
      */

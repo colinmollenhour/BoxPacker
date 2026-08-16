@@ -136,6 +136,48 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
+     * Pack this box maximising used volume, even if that means leaving a large
+     * item out so smaller ones can fill the space more densely.
+     *
+     * pack() still places the largest item that fits first. This retries
+     * after dropping that item from the candidate list. Leftover items are
+     * those not in the returned box.
+     */
+    public function packBestSubset(): PackedBox
+    {
+        $items = clone $this->items;
+        $best = new PackedBox($this->box, new PackedItemList());
+        $bestUsedVolume = 0;
+
+        while ($items->count() > 0) {
+            if ($bestUsedVolume > 0 && $items->getVolume() <= $bestUsedVolume) {
+                break;
+            }
+
+            $attempt = new self($this->box, $items);
+            $attempt->setLogger($this->logger);
+            $attempt->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
+            if ($this->packAcrossWidthOnly) {
+                $attempt->packAcrossWidthOnly();
+            }
+            $packedBox = $attempt->pack();
+
+            if ($packedBox->getUsedVolume() > $bestUsedVolume) {
+                $best = $packedBox;
+                $bestUsedVolume = $packedBox->getUsedVolume();
+            }
+
+            if ($packedBox->items->count() === $items->count()) {
+                break;
+            }
+
+            $items->extract();
+        }
+
+        return $best;
+    }
+
+    /**
      * Pack as many items as possible into specific given box.
      *
      * @return PackedBox packed box

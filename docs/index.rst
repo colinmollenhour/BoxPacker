@@ -31,4 +31,5 @@ BoxPacker is licensed under the `MIT license`_.
     linked-items
     used-remaining-space
     all-permutations
+    single-box
     changelog

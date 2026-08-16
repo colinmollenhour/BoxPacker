@@ -691,4 +691,24 @@ class VolumePackerTest extends TestCase
 
         self::assertCount(6, $packedBox->items);
     }
+
+    /**
+     * A large item can win “biggest that fits” and block several smaller ones
+     * that would fill the box more densely. pack() keeps the large item;
+     * packBestSubset() drops it.
+     */
+    public function testPackBestSubsetPrefersDenserSubset(): void
+    {
+        $box = new TestBox('Box', 10, 10, 5, 0, 10, 10, 5, 1000);
+        $items = new ItemList();
+        $items->insert(new TestItem('A', 8, 8, 5, 1, Rotation::BestFit));
+        $items->insert(new TestItem('B', 5, 5, 5, 1, Rotation::BestFit), 4);
+
+        $greedy = (new VolumePacker($box, $items))->pack();
+        self::assertSame(1, $greedy->items->count());
+
+        $best = (new VolumePacker($box, $items))->packBestSubset();
+        self::assertSame(4, $best->items->count());
+        self::assertSame(100.0, $best->getVolumeUtilisation());
+    }
 }

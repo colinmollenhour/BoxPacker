@@ -239,6 +239,19 @@ class ItemList implements Countable, IteratorAggregate
     }
 
     /**
+     * Get total volume of these items.
+     */
+    public function getVolume(): int
+    {
+        $volume = 0;
+        foreach ($this->list as $item) {
+            $volume += $item->getWidth() * $item->getLength() * $item->getDepth();
+        }
+
+        return $volume;
+    }
+
+    /**
      * Does this list contain items with constrained placement criteria.
      */
     public function hasConstrainedItems(): bool

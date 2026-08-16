@@ -1,6 +1,9 @@
 # Changelog
 
 ## [4.x - Unreleased] - 2026-xx-xx
+### Added
+- `VolumePacker::packBestSubset()` for the single-container “fill this box as densely as possible” problem (leftover items are expected)
+
 ## [4.3.0] - 2026-08-09
 ### Changed
 - Improved efficiency in packing
