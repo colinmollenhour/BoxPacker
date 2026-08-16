@@ -22,6 +22,7 @@ use function assert;
 use function array_map;
 use function spl_object_id;
 use function rawurlencode;
+use function sort;
 
 use const JSON_THROW_ON_ERROR;
 use const JSON_NUMERIC_CHECK;
@@ -235,8 +236,11 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Validate that all items are placed solely within the confines of the box, that no two items are placed
-     * into the same physical space, and that the packed weight does not exceed the box maximum.
+     * Geometric and weight invariants of a finished box: in-bounds, no overlaps,
+     * legal item orientation, under max weight.
+     *
+     * Placement callbacks and linked-group membership need the live unpacked list
+     * and are enforced at pack time, not here.
      */
     private function assertPackingCompliesWithRealWorld(): true
     {
@@ -253,6 +257,7 @@ readonly class PackedBox implements JsonSerializable
             assert($itemToCheck->y + $itemToCheck->length <= $this->box->getInnerLength());
             assert($itemToCheck->z >= 0);
             assert($itemToCheck->z + $itemToCheck->depth <= $this->box->getInnerDepth());
+            assert($this->packedDimensionsMatchItem($itemToCheck));
 
             foreach ($itemsToCheck as $otherItem) {
                 $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->width) && $otherItem->x < ($itemToCheck->x + $itemToCheck->width);
@@ -265,5 +270,28 @@ readonly class PackedBox implements JsonSerializable
         }
 
         return true;
+    }
+
+    /**
+     * Packed edges must be the item's own dimensions, permuted only as its Rotation allows.
+     */
+    private function packedDimensionsMatchItem(PackedItem $packedItem): bool
+    {
+        $item = $packedItem->item;
+        $packed = [$packedItem->width, $packedItem->length, $packedItem->depth];
+        $defined = [$item->getWidth(), $item->getLength(), $item->getDepth()];
+        $packedSorted = $packed;
+        $definedSorted = $defined;
+        sort($packedSorted);
+        sort($definedSorted);
+        if ($packedSorted !== $definedSorted) {
+            return false;
+        }
+
+        return match ($item->getAllowedRotation()) {
+            Rotation::Never => $packed === $defined,
+            Rotation::KeepFlat => $packedItem->depth === $item->getDepth(),
+            Rotation::BestFit => true,
+        };
     }
 }
