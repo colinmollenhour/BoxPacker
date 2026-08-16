@@ -20,6 +20,13 @@
     </testsuite>
   </testsuites>
 
+  <groups>
+    <exclude>
+      <group>efficiency-container</group>
+      <group>efficiency-extreme</group>
+    </exclude>
+  </groups>
+
   <source>
     <include>
       <directory suffix=".php">src</directory>

@@ -121,7 +121,7 @@ jobs:
 
 
   speedrun:
-    name: Speed run
+    name: Speed run / ${{ matrix.suite }} (${{ matrix.php-version }}, ${{ matrix.dependencies }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -137,6 +137,12 @@ jobs:
           - "highest"
           - "lowest"
           - "latest"
+
+        suite:
+          - efficiency-ecommerce
+          - efficiency-bookshop
+          - efficiency-container
+          - efficiency-extreme
 
     steps:
     - uses: actions/checkout@v7
@@ -209,7 +215,4 @@ jobs:
         composer show;
 
     - name: PHPUnit (no coverage)
-      run: vendor/bin/phpunit --no-coverage;
-
-    - name: Behat (no coverage)
-      run: vendor/bin/behat --strict --no-coverage;
+      run: vendor/bin/phpunit --no-coverage --group ${{ matrix.suite }};

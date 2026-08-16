@@ -331,6 +331,7 @@ class VolumePackerTest extends TestCase
      * From issue #172.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-extreme')]
     public function testIssue172A(): void
     {
         $box = new TestBox('Box', 800, 1200, 1300, 0, 800, 1200, 1300, 500000);

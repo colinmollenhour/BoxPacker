@@ -42,6 +42,7 @@ class WeightRedistributorTest extends TestCase
      * From issue #166.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-container')]
     public function testIssue166(): void
     {
         $packer = new Packer();

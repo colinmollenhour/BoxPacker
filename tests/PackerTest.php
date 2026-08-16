@@ -248,6 +248,7 @@ class PackerTest extends TestCase
      * From issue #182.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-ecommerce')]
     public function testIssue182A(): void
     {
         $packer = new Packer();
@@ -427,6 +428,7 @@ class PackerTest extends TestCase
      * From PR #198, tests with an atypically large number of boxes.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-extreme')]
     public function testNumberOfBoxesTorture(): void
     {
         $packer = new Packer();
@@ -716,6 +718,7 @@ class PackerTest extends TestCase
      * From issue #182.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-extreme')]
     public function testIssue182B(): void
     {
         $packer = new Packer();
@@ -1461,6 +1464,7 @@ class PackerTest extends TestCase
      * From issue #620.
      */
     #[Group('efficiency')]
+    #[Group('efficiency-extreme')]
     public function testIssue620(): void
     {
         $packer = new Packer();

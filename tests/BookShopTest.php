@@ -19,12 +19,16 @@ use PHPUnit\Framework\TestCase;
 use function fclose;
 use function fgetcsv;
 use function fopen;
+use function sprintf;
 
 #[CoversNothing]
-class EfficiencyTest extends TestCase
+class BookShopTest extends TestCase
 {
+    use LastrunCsvSupport;
+
     #[DataProvider('getSamples')]
     #[Group('efficiency')]
+    #[Group('efficiency-bookshop')]
     public function testCanPackRepresentativeLargerSamples(
         array $boxes,
         array $items,
@@ -83,6 +87,20 @@ class EfficiencyTest extends TestCase
         foreach ($packedBoxes3D as $packedBox) {
             $packedItemCount3D += $packedBox->items->count();
         }
+
+        self::appendLastrun(
+            self::lastrunPath('expected.csv'),
+            sprintf(
+                "%s,%d,%s,%s,%d,%s,%s\n",
+                $this->dataName(),
+                $packedBoxes2D->count(),
+                self::lastrunNumber($packedBoxes2D->getWeightVariance()),
+                self::lastrunNumber($packedBoxes2D->getVolumeUtilisation()),
+                $packedBoxes3D->count(),
+                self::lastrunNumber($packedBoxes3D->getWeightVariance()),
+                self::lastrunNumber($packedBoxes3D->getVolumeUtilisation())
+            )
+        );
 
         self::assertCount($expectedBoxes2D, $packedBoxes2D);
         self::assertEquals($expectedItemCount, $packedItemCount2D);
@@ -160,5 +178,13 @@ class EfficiencyTest extends TestCase
         fclose($itemData);
 
         return $tests;
+    }
+
+    /**
+     * Match expected.csv: whole numbers as integers, otherwise one decimal.
+     */
+    private static function lastrunNumber(float $value): string
+    {
+        return $value == (int) $value ? (string) (int) $value : sprintf('%.1f', $value);
     }
 }
