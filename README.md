@@ -7,11 +7,22 @@ BoxPacker
 [![Current version](https://img.shields.io/packagist/v/dvdoug/boxpacker.svg)](https://packagist.org/packages/dvdoug/boxpacker)
 [![Documentation](https://readthedocs.org/projects/boxpacker/badge/?version=stable)](https://www.boxpacker.io/en/stable/)
 
-An implementation of the "4D" bin packing/knapsack problem i.e. given a list of items, how many boxes do you need to fit
-them all in taking into account physical dimensions and weights.
+An implementation of the 3D bin packing problem with weight as a fourth constraint: given items and a catalogue of
+boxes, how many cartons do you need, and what goes in each?
 
-Especially useful for e.g. e-commerce contexts when you need to know box size/weight to calculate shipping costs, or
-even just want to know the right number of labels to print.
+The same engine can also fill a single container (pallet, trailer, ocean box) as densely as possible and leave the rest
+unpacked.
+
+Typical uses: e-commerce cartonization and shipping-cost calculation, warehouse box selection, and one-container load
+planning.
+
+* Your own Item/Box objects (no wrapper DTOs)
+* Rotation: any way up, keep-flat, or none
+* Weight limits and automatic weight balancing across cartons
+* Limited box stock, linked items, custom placement rules
+* Packed x/y/z coordinates and a 3D visualiser
+
+Requires PHP 8.2+. `composer require dvdoug/boxpacker`
 
 See [documentation](https://boxpacker.io/) for more details.
 
