@@ -27,15 +27,16 @@ How it works
 
 Identical items are grouped into *blocks* - neat columns, walls and layers of one item type in one orientation.
 The empty space in the box is tracked as a set of overlapping *maximal spaces*: the largest empty cuboids that fit
-between what has been packed so far. At each step the space closest to a corner of the box is filled with the best
-block that fits it, the block being tucked into that corner. "Best" is the block's volume less the part of the
+between what has been packed so far. At each step the lowest space (and of those, the one closest to a corner of the
+box) is filled with the best block that fits it, the block being tucked into the corner. "Best" is the block's volume less the part of the
 surrounding gap that the remaining items could never fill.
 
 On its own that greedy procedure is already good; a *beam search* then explores alternatives. Each partial packing is
 scored by greedily completing it, the most promising few are expanded further, and the search is repeated with an
 ever-wider beam (1, 2, 4, 8 ...) until the effort budget or the maximum width is reached. The best complete packing
-found is returned. Because the fast packer is also run and the denser result kept (for up to 300 items),
-``Thorough`` never packs less volume than ``Fast`` would, support rules permitting.
+found is returned. For orders of up to 100 items the fast packer is run as well and the denser result kept, so on
+those ``Thorough`` never packs less volume than ``Fast`` would (support rules permitting); on larger loads the search
+is consistently the denser of the two, so only it is run.
 
 Everything the fast packer honours is honoured: allowed rotations (``Rotation::Never``, ``KeepFlat``, ``BestFit``),
 the preference for stable orientations, box weight limits, and ``ConstrainedPlacementItem`` callbacks.

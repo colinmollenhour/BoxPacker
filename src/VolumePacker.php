@@ -29,7 +29,7 @@ class VolumePacker implements LoggerAwareInterface
      * Above this many items the Thorough strategy no longer also runs the fast packer for comparison: on large
      * loads the block search is consistently denser and the fast packer's run time grows quickly.
      */
-    private const FAST_COMPARISON_LIMIT = 300;
+    private const FAST_COMPARISON_LIMIT = 100;
 
     protected LoggerInterface $logger;
 
