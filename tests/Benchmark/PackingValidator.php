@@ -78,8 +78,8 @@ final class PackingValidator
             }
             $supported = 0;
             foreach ($items as $other) {
-                if ($other->z + $other->depth !== $item->z) {
-                    continue;
+                if ($other->z + $other->depth !== $item->z || $other->z >= $item->z) {
+                    continue; // only items reaching up from below can support it
                 }
                 $ix = min($item->x + $item->width, $other->x + $other->width) - max($item->x, $other->x);
                 $iy = min($item->y + $item->length, $other->y + $other->length) - max($item->y, $other->y);
@@ -87,7 +87,7 @@ final class PackingValidator
                     $supported += $ix * $iy;
                 }
             }
-            $minimum = min($minimum, $supported / ($item->width * $item->length));
+            $minimum = min($minimum, $supported / (($item->width * $item->length) ?: 1));
         }
 
         return $minimum;

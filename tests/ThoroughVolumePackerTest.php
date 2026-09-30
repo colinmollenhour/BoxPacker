@@ -165,9 +165,35 @@ class ThoroughVolumePackerTest extends TestCase
         $box = new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000);
         $items = new ItemList();
         $items->insert(new TestItem('Sheet', 10, 10, 0, 1, Rotation::BestFit), 2);
-        $items->insert(new TestItem('Cube', 10, 10, 10, 1, Rotation::BestFit));
+        $items->insert(new TestItem('Cube', 10, 10, 10, 1, Rotation::BestFit), 20);
+        $items->insert(new TestItem('Slab', 90, 90, 5, 1, Rotation::KeepFlat));
 
-        self::assertCount(3, self::thorough($box, $items)->items);
+        $packedBox = self::thorough($box, $items);
+
+        self::assertCount(23, $packedBox->items);
+        self::assertValid($packedBox); // the other items still meet the support requirement
+    }
+
+    public function testAFlatItemDoesNotSupportItself(): void
+    {
+        $box = new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000);
+        $packedItems = new PackedItemList();
+        $packedItems->insert(new PackedItem(new TestItem('Sheet', 10, 10, 0, 1, Rotation::BestFit), 0, 0, 50, 10, 10, 0));
+
+        self::assertSame(0.0, SupportCalculator::minimumSupport($packedItems));
+        self::assertSame(0.0, PackingValidator::minimumSupport(new PackedBox($box, $packedItems)));
+    }
+
+    public function testSearchBudgetBoundsEachGreedyCompletion(): void
+    {
+        $instance = InstanceLoader::load('br10')[0];
+        $packer = new VolumePacker($instance['box'], $instance['items']);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setSearchBudget(50);
+        $packer->pack();
+
+        // the first greedy completion always finishes; after that the search stops as soon as the budget is spent
+        self::assertLessThanOrEqual(50 + $instance['items']->count() + 1, $packer->getSearchPlacements());
     }
 
     public function testGreedyOnlySearchStillPlacesAnItemThatLeavesUnusableSpace(): void

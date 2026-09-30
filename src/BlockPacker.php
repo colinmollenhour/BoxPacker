@@ -145,6 +145,14 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $totalItems = 0;
 
+    /**
+     * Items with a zero dimension. They occupy no volume, so they are placed on the floor in the corner once the
+     * rest of the load has been packed.
+     *
+     * @var list<Item>
+     */
+    private array $flatItems = [];
+
     private int $packableVolume = 0;
 
     /**
@@ -205,6 +213,10 @@ class BlockPacker implements LoggerAwareInterface
 
         $typeIndex = [];
         foreach ($items as $item) {
+            if ($item->getWidth() === 0 || $item->getLength() === 0 || $item->getDepth() === 0) {
+                $this->flatItems[] = $item; // take up no space: added at the end
+                continue;
+            }
             $key = $item->getWidth() . '|' . $item->getLength() . '|' . $item->getDepth() . '|' . $item->getWeight() . '|' . $item->getAllowedRotation()->name;
             if ($item instanceof ConstrainedPlacementItem) {
                 $key .= '|#' . spl_object_id($item);
@@ -325,7 +337,7 @@ class BlockPacker implements LoggerAwareInterface
         $root->remaining = $this->totalItems;
         $this->updateSpaceFilter($root);
 
-        $rootCompleted = $this->greedy(clone $root);
+        $rootCompleted = $this->greedy(clone $root, false);
         $best = $rootCompleted;
 
         $this->budgetExhausted = false;
@@ -443,10 +455,15 @@ class BlockPacker implements LoggerAwareInterface
     /**
      * Complete a state by repeatedly placing the best block into the most promising space.
      */
-    private function greedy(BlockSearchState $state): BlockSearchState
+    private function greedy(BlockSearchState $state, bool $withinLimits = true): BlockSearchState
     {
         ++$this->greedyRuns;
         while ($state->remaining > 0) {
+            // stop part way through if the effort budget or time runs out, keeping what has been placed; the very
+            // first completion is exempt, so that there is always a complete answer (it is only one pass)
+            if ($withinLimits && ($this->placements > $this->placementBudget || hrtime(true) > $this->deadline)) {
+                break;
+            }
             $spaceIndex = $this->selectSpace($state);
             if ($spaceIndex === null) {
                 break;
@@ -1154,6 +1171,20 @@ class BlockPacker implements LoggerAwareInterface
         $next = [];
         foreach ($state->placements as $placement) {
             $this->appendItems($list, $placement, $next);
+        }
+
+        $weightLeft = $state->weightLeft;
+        foreach ($this->flatItems as $item) {
+            $orientation = $this->buildOrientations($item)[0] ?? null;
+            if ($orientation === null || $item->getWeight() > $weightLeft) {
+                continue;
+            }
+            [$w, $l, $h] = $orientation;
+            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), 0, 0, 0, $w, $l, $h)) {
+                continue;
+            }
+            $list->insert(new PackedItem($item, 0, 0, 0, $w, $l, $h));
+            $weightLeft -= $item->getWeight();
         }
 
         return new PackedBox($this->box, $list);

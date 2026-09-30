@@ -36,8 +36,8 @@ How it works
 Identical items are grouped into *blocks* - neat columns, walls and layers of one item type in one orientation.
 The empty space in the box is tracked as a set of overlapping *maximal spaces*: the largest empty cuboids that fit
 between what has been packed so far. At each step the lowest space (and of those, the one closest to a corner of the
-box) is filled with the best block that fits it, the block being tucked into the corner. "Best" is the block's volume less the part of the
-surrounding gap that the remaining items could never fill.
+box) is filled with the best block that fits it, the block being tucked into the corner. "Best" is the block's volume
+less the part of the surrounding gap that the remaining items could never fill.
 
 On its own that greedy procedure is already good; a *beam search* then explores alternatives. Each partial packing is
 scored by greedily completing it, the most promising few are expanded further, and the search is repeated with an

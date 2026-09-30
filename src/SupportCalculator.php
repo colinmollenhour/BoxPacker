@@ -39,6 +39,9 @@ class SupportCalculator
         foreach ($raised as $item) {
             $supported = 0;
             foreach ($byTop[$item->z] ?? [] as $other) {
+                if ($other->z >= $item->z) {
+                    continue; // only items reaching up from below can support it (not itself, nor flat items level with it)
+                }
                 $ix = min($item->x + $item->width, $other->x + $other->width) - max($item->x, $other->x);
                 if ($ix <= 0) {
                     continue;

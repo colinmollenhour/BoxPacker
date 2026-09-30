@@ -21,9 +21,10 @@ enum PackingStrategy: string
     case Fast = 'fast';
 
     /**
-     * Block-building beam search over maximal free spaces, plus the fast packer, keeping whichever result is
-     * better. For multiple boxes, the box selection is then improved by trying to repack boxes into fewer or
-     * smaller ones. Slower, but typically packs considerably denser.
+     * Block-building beam search over maximal free spaces. For small loads (up to 40 items per box, 200 per order)
+     * the fast packer is also run and its result kept if it is better and meets the support requirement. For
+     * multiple boxes, the box selection is then improved by trying to repack boxes into fewer or cheaper ones.
+     * Slower, but typically packs considerably denser.
      */
     case Thorough = 'thorough';
 }

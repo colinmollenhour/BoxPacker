@@ -94,7 +94,8 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
-     * Fast (original layer packer, the default) or Thorough (block-building search, never worse than Fast).
+     * Fast (original layer packer, the default) or Thorough (block-building search; for up to 40 items the fast
+     * packer is also tried and the denser result kept, support rules permitting).
      */
     public function setStrategy(PackingStrategy $strategy): void
     {
@@ -195,22 +196,7 @@ class VolumePacker implements LoggerAwareInterface
             && !$this->singlePassMode
             && !$this->beStrictAboutItemOrdering
             && !$this->packAcrossWidthOnly
-            && $this->items->count() > 0
-            && !$this->hasFlatItems();
-    }
-
-    /**
-     * Whether any item has a zero dimension (the block search works in volumes and counts per length).
-     */
-    private function hasFlatItems(): bool
-    {
-        foreach ($this->items as $item) {
-            if ($item->getWidth() === 0 || $item->getLength() === 0 || $item->getDepth() === 0) {
-                return true;
-            }
-        }
-
-        return false;
+            && $this->items->count() > 0;
     }
 
     private function packThorough(): PackedBox

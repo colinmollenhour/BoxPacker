@@ -80,7 +80,7 @@ final class Strategies
             $packer->setSpaceRule((int) $options['rule']);
         }
         if (isset($options['budget'])) {
-            $packer->setPlacementBudget((int) $options['budget']);
+            $packer->setPlacementBudget($options['budget'] === 'none' ? null : (int) $options['budget']);
         }
         if (isset($options['scoring'])) {
             $packer->setScoring((int) $options['scoring']);
@@ -100,7 +100,7 @@ final class Strategies
             $packer->setMaxBeamWidth((int) $options['width']);
         }
         if (isset($options['budget'])) {
-            $packer->setSearchBudget((int) $options['budget'] ?: null);
+            $packer->setSearchBudget($options['budget'] === 'none' ? null : (int) $options['budget']);
         }
         if (isset($options['support'])) {
             $packer->setMinimumSupport((float) $options['support']);
@@ -126,7 +126,7 @@ final class Strategies
             $packer->setMaxBeamWidth((int) $options['width']);
         }
         if (isset($options['budget'])) {
-            $packer->setSearchBudget((int) $options['budget'] ?: null);
+            $packer->setSearchBudget($options['budget'] === 'none' ? null : (int) $options['budget']);
         }
         if (isset($options['support'])) {
             $packer->setMinimumSupport((float) $options['support']);
