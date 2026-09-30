@@ -695,7 +695,11 @@ class BlockPacker implements LoggerAwareInterface
                     }
                     $mx = intdiv($maxWidth, $ow);
                     $my = intdiv($maxLength, $ol);
-                    if ($mx * $my * $mz <= $count) {
+                    $capacity = $mx * $my * $mz;
+                    if ($tracked && ($capacity < $count ? $capacity : $count) * $volume <= $bestScore) {
+                        continue; // no block of this orientation could beat the best so far
+                    }
+                    if ($capacity <= $count) {
                         $variants = [[$mx, $my, $mz]];
                     } elseif ($count === 1) {
                         $variants = [[1, 1, 1]];
