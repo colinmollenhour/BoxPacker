@@ -16,6 +16,8 @@ unpacked.
 Typical uses: e-commerce cartonization and shipping-cost calculation, warehouse box selection, and one-container load
 planning.
 
+* Two strategies: `Fast` (the default) and `Thorough`, a block-building search that packs 10-15 percentage points
+  more volume on the published container loading benchmarks and can minimise your shipping cost
 * Your own Item/Box objects (no wrapper DTOs)
 * Rotation: any way up, keep-flat, or none
 * Weight limits and automatic weight balancing across cartons
