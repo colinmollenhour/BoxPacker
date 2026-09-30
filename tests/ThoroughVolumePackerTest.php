@@ -192,8 +192,8 @@ class ThoroughVolumePackerTest extends TestCase
         $packer->setSearchBudget(50);
         $packer->pack();
 
-        // the first greedy completion always finishes; after that the search stops as soon as the budget is spent
-        self::assertLessThanOrEqual(50 + $instance['items']->count() + 1, $packer->getSearchPlacements());
+        // the first greedy completion always finishes; after that, work in progress is cut short at twice the budget
+        self::assertLessThanOrEqual(100 + $instance['items']->count() + 1, $packer->getSearchPlacements());
     }
 
     public function testGreedyOnlySearchStillPlacesAnItemThatLeavesUnusableSpace(): void

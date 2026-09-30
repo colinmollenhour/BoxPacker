@@ -122,8 +122,8 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: a deterministic cap on search effort, as the number of trial block placements
-     * (default 10,000); the best packing found within it is used. Unlike a time limit, results do not depend on
-     * machine speed. null = no cap.
+     * (default 10,000); the best packing found within it is used (a search step in progress may run on to twice the
+     * budget). Unlike a time limit, results do not depend on machine speed. null = no cap.
      */
     public function setSearchBudget(?int $placements): void
     {

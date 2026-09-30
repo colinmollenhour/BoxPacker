@@ -177,6 +177,11 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $placementBudget = PHP_INT_MAX;
 
+    /**
+     * Hard limit on trial placements, at which even a greedy completion in progress is cut short.
+     */
+    private int $placementCap = PHP_INT_MAX;
+
     private int $spaceRule = 1;
 
     private int $scoring = 1;
@@ -284,12 +289,14 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Deterministic cap on search effort: the maximum number of trial block placements (across all greedy
-     * completions) before the best packing found so far is returned. Roughly proportional to run time.
+     * Deterministic cap on search effort: the number of trial block placements (across all greedy completions)
+     * after which no new work is started and the best packing found so far is returned. Work in progress is
+     * allowed to finish, but is cut short at twice the budget. Roughly proportional to run time.
      */
     public function setPlacementBudget(?int $placements): void
     {
         $this->placementBudget = $placements ?? PHP_INT_MAX;
+        $this->placementCap = $placements === null ? PHP_INT_MAX : 2 * $placements;
     }
 
     /**
@@ -459,9 +466,9 @@ class BlockPacker implements LoggerAwareInterface
     {
         ++$this->greedyRuns;
         while ($state->remaining > 0) {
-            // stop part way through if the effort budget or time runs out, keeping what has been placed; the very
-            // first completion is exempt, so that there is always a complete answer (it is only one pass)
-            if ($withinLimits && ($this->placements > $this->placementBudget || hrtime(true) > $this->deadline)) {
+            // stop part way through at the hard effort cap or when time runs out, keeping what has been placed; the
+            // very first completion is exempt, so that there is always a complete answer (it is only one pass)
+            if ($withinLimits && ($this->placements > $this->placementCap || hrtime(true) > $this->deadline)) {
                 break;
             }
             $spaceIndex = $this->selectSpace($state);
