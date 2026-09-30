@@ -1048,7 +1048,8 @@ class BlockPacker implements LoggerAwareInterface
         $state->remaining -= $n;
         $state->weightLeft -= $n * $this->weights[$type];
         $state->tops[$z2][] = [$x, $y, $x2, $y2];
-        if ($state->counts[$type] === 0) {
+        // the filter only changes if the type just used up was the one setting one of its minimums
+        if ($state->counts[$type] === 0 && ($this->minHeights[$type] <= $state->minHeight || $this->minFootprintEdges[$type] <= $state->minFootprintEdge || $this->volumes[$type] <= $state->minVolume)) {
             $this->updateSpaceFilter($state);
         }
         $state->spaces = $this->occupy($state, $x, $y, $z, $x2, $y2, $z2);
