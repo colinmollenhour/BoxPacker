@@ -31,6 +31,8 @@ class LinkedItemGroupEnforcer
 
     private bool $beStrictAboutItemOrdering = false;
 
+    private ?VolumePackerFactory $volumePackerFactory = null;
+
     public function __construct()
     {
         $this->logger = new NullLogger();
@@ -44,6 +46,16 @@ class LinkedItemGroupEnforcer
     public function beStrictAboutItemOrdering(bool $beStrict): void
     {
         $this->beStrictAboutItemOrdering = $beStrict;
+    }
+
+    /**
+     * Repack boxes with VolumePackers from this factory (so that they use the Packer's strategy and search settings).
+     *
+     * @internal
+     */
+    public function setVolumePackerFactory(VolumePackerFactory $volumePackerFactory): void
+    {
+        $this->volumePackerFactory = $volumePackerFactory;
     }
 
     public function enforceConstraint(PackedBox $candidate, ItemList $items): PackedBox
@@ -123,7 +135,7 @@ class LinkedItemGroupEnforcer
             return new PackedBox($candidate->box, new PackedItemList());
         }
 
-        $volumePacker = new VolumePacker($candidate->box, $eligibleItems);
+        $volumePacker = $this->volumePackerFactory?->create($candidate->box, $eligibleItems) ?? new VolumePacker($candidate->box, $eligibleItems);
         $volumePacker->setLogger($this->logger);
         $volumePacker->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
 

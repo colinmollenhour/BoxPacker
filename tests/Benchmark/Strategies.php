@@ -34,7 +34,7 @@ final class Strategies
             'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing)',
             'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
             'block' => 'Block-building beam search engine only (options: width, budget, support, time, rule, scoring)',
-            'vp-thorough' => 'VolumePacker with PackingStrategy::Thorough (options: width, budget, support, time)',
+            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack(), library defaults unless overridden (options: width, budget, support, time, balance)',
         ];
     }
 
@@ -47,7 +47,7 @@ final class Strategies
             'legacy' => (new VolumePacker($box, $items))->pack(),
             'legacy-subset' => (new VolumePacker($box, $items))->packBestSubset(),
             'block' => self::blockPacker($box, $items, $options)->pack(),
-            'vp-thorough' => self::thoroughVolumePacker($box, $items, $options)->pack(),
+            'thorough' => self::thoroughSingle($box, $items, $options)->pack(),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
     }
@@ -60,31 +60,9 @@ final class Strategies
     {
         return match ($strategy) {
             'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items),
+            'thorough' => self::thoroughMulti($boxes, $items, $options),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
-    }
-
-    /**
-     * @param array<string, string> $options
-     */
-    private static function thoroughVolumePacker(Box $box, ItemList $items, array $options): VolumePacker
-    {
-        $packer = new VolumePacker($box, $items);
-        $packer->setStrategy(PackingStrategy::Thorough);
-        if (isset($options['width'])) {
-            $packer->setMaxBeamWidth((int) $options['width']);
-        }
-        if (isset($options['budget'])) {
-            $packer->setSearchBudget((int) $options['budget'] ?: null);
-        }
-        if (isset($options['support'])) {
-            $packer->setMinimumSupport((float) $options['support']);
-        }
-        if (isset($options['time'])) {
-            $packer->setSearchTimeLimit((float) $options['time']);
-        }
-
-        return $packer;
     }
 
     /**
@@ -109,6 +87,61 @@ final class Strategies
         }
 
         return $packer;
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    private static function thoroughSingle(Box $box, ItemList $items, array $options): VolumePacker
+    {
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        if (isset($options['width'])) {
+            $packer->setMaxBeamWidth((int) $options['width']);
+        }
+        if (isset($options['budget'])) {
+            $packer->setSearchBudget((int) $options['budget'] ?: null);
+        }
+        if (isset($options['support'])) {
+            $packer->setMinimumSupport((float) $options['support']);
+        }
+        if (isset($options['time'])) {
+            $packer->setSearchTimeLimit((float) $options['time']);
+        }
+
+        return $packer;
+    }
+
+    /**
+     * Weight balancing is off unless asked for (balance=N boxes), as for the legacy strategy.
+     *
+     * @param list<Box>             $boxes
+     * @param array<string, string> $options
+     */
+    private static function thoroughMulti(array $boxes, ItemList $items, array $options): PackedBoxList
+    {
+        $packer = new Packer();
+        $packer->setStrategy(PackingStrategy::Thorough);
+        if (isset($options['width'])) {
+            $packer->setMaxBeamWidth((int) $options['width']);
+        }
+        if (isset($options['budget'])) {
+            $packer->setSearchBudget((int) $options['budget'] ?: null);
+        }
+        if (isset($options['support'])) {
+            $packer->setMinimumSupport((float) $options['support']);
+        }
+        if (isset($options['time'])) {
+            $packer->setSearchTimeLimit((float) $options['time']);
+        }
+        $packer->setMaxBoxesToBalanceWeight((int) ($options['balance'] ?? 0));
+        $packer->throwOnUnpackableItem(false);
+        foreach ($boxes as $box) {
+            $packer->addBox($box);
+        }
+        $packer->setItems($items);
+
+        return $packer->pack();
     }
 
     /**

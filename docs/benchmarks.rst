@@ -36,10 +36,10 @@ Running
     bin/benchmark --strategy=legacy --datasets=published --save=build/legacy.json
 
     # the thorough strategy on the first 20 instances of each container set, compared per instance with the above
-    bin/benchmark --strategy=vp-thorough --datasets=container --limit=20 --compare=build/legacy.json
+    bin/benchmark --strategy=thorough --datasets=container --limit=20 --compare=build/legacy.json
 
     # strategy options, e.g. a larger search budget and full support
-    bin/benchmark --strategy=vp-thorough --opt=budget=40000 --opt=support=1
+    bin/benchmark --strategy=thorough --opt=budget=40000 --opt=support=1
 
 Every strategy is deterministic unless a time limit is given, so the same command always reports the same quality
 figures. Each packed box is also checked independently for overlaps, items outside the box, disallowed orientations
