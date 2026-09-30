@@ -28,6 +28,12 @@ use const PHP_INT_MAX;
  */
 class Packer implements LoggerAwareInterface
 {
+    /**
+     * For orders of up to this many items, the Thorough strategy also runs the Fast strategy and keeps its boxes if
+     * they are better, so that Thorough is never worse (support rules permitting).
+     */
+    private const FAST_COMPARISON_LIMIT = 200;
+
     private LoggerInterface $logger;
 
     protected int $maxBoxesToBalanceWeight = 12;
@@ -278,8 +284,27 @@ class Packer implements LoggerAwareInterface
         );
         $thoroughPacker->setLogger($this->logger);
 
+        $fastPacker = $this->items->count() <= self::FAST_COMPARISON_LIMIT ? $this->packFastForComparison() : null;
+
         $packedBoxes = new PackedBoxList($this->packedBoxSorter);
         $packedBoxes->insertFromArray($thoroughPacker->pack($this->items, $this->throwOnUnpackableItem));
+
+        // keep the fast packer's boxes if they are better (and supported well enough)
+        if ($fastPacker !== null) {
+            $fastBoxes = $fastPacker->doBasicPacking();
+            $fastIsSupported = true;
+            foreach ($fastBoxes as $fastBox) {
+                $fastIsSupported = $fastIsSupported && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
+            }
+            $unpackedDecider = $fastPacker->items->count() <=> $this->items->count();
+            if ($fastIsSupported && ($unpackedDecider < 0 || ($unpackedDecider === 0 && $thoroughPacker->compareSolutions($fastBoxes, $packedBoxes) < 0))) {
+                $packedBoxes = $fastBoxes;
+                $this->items = $fastPacker->items;
+                foreach ($this->boxes as $box) {
+                    $this->boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
+                }
+            }
+        }
 
         if ($packedBoxes->count() > 1 && $packedBoxes->count() <= $this->maxBoxesToBalanceWeight) {
             $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
@@ -295,6 +320,21 @@ class Packer implements LoggerAwareInterface
         $this->logger->log(LogLevel::INFO, "[PACKING COMPLETED], {$packedBoxes->count()} boxes");
 
         return $packedBoxes;
+    }
+
+    /**
+     * A Fast-strategy packer set up with the same items, boxes and box quantities as this one, ready to pack.
+     */
+    private function packFastForComparison(): self
+    {
+        $packer = new self(clone $this->items, new BoxList(), $this->packedBoxSorter);
+        $packer->setBoxes($this->boxes);
+        foreach ($this->boxes as $box) {
+            $packer->setBoxQuantity($box, $this->boxQuantitiesAvailable[$box]);
+        }
+        $packer->throwOnUnpackableItem(false);
+
+        return $packer;
     }
 
     /**

@@ -304,6 +304,18 @@ class ThoroughPackerTest extends TestCase
         }
     }
 
+    public function testKeepsTheFastPackingWhenItIsBetterAndSupported(): void
+    {
+        // Ivancic #5: the fast packer's (fully supported) solution needs one container fewer than the block search's
+        $instance = InstanceLoader::load('ivancic')[4];
+        $fast = Benchmark\Strategies::multi('legacy', $instance['boxes'], $instance['items'], []);
+        $thorough = Benchmark\Strategies::multi('thorough', $instance['boxes'], $instance['items'], []);
+
+        self::assertLessThanOrEqual($fast->count(), $thorough->count());
+        self::assertSame($instance['items']->count(), self::itemCount($thorough));
+        self::assertValid($thorough, 0.5);
+    }
+
     public function testWeightBalancingDoesNotAddBoxes(): void
     {
         $withoutBalancing = self::thoroughPacker();
