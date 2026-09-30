@@ -40,6 +40,7 @@ class WeightRedistributor implements LoggerAwareInterface
         private readonly PackedBoxSorter $packedBoxSorter,
         private WeakMap $boxQuantitiesAvailable,
         private readonly ?TimeoutChecker $timeoutChecker,
+        private readonly ?VolumePackerFactory $volumePackerFactory = null,
     ) {
         $this->logger = new NullLogger();
     }
@@ -169,7 +170,7 @@ class WeightRedistributor implements LoggerAwareInterface
         $packer->setBoxQuantity($currentBox, $this->boxQuantitiesAvailable[$currentBox] + 1);
         $packer->setItems($items);
 
-        $packedBoxes = $packer->doBasicPacking(true);
+        $packedBoxes = $packer->doBasicPacking(true, $this->volumePackerFactory);
         if ($packedBoxes->count() !== 1 || $packer->getUnpackedItems()->count() !== 0) {
             return new PackedBoxList($this->packedBoxSorter);
         }
