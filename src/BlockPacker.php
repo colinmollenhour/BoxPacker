@@ -28,7 +28,6 @@ use function min;
 use function sort;
 use function spl_object_id;
 use function usort;
-use function assert;
 
 use const PHP_INT_MAX;
 
@@ -902,27 +901,43 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function constraintsAllow(BlockSearchState $state, array $candidate): bool
     {
-        $type = $candidate[self::C_TYPE];
         $context = clone $this->context($state);
-        $next = $this->initialCounts[$type] - $state->counts[$type];
-        [$ow, $ol, $oh, $nx, $ny, $nz, $x, $y, $z] = [$candidate[self::C_OW], $candidate[self::C_OL], $candidate[self::C_OH], $candidate[self::C_NX], $candidate[self::C_NY], $candidate[self::C_NZ], $candidate[self::C_X], $candidate[self::C_Y], $candidate[self::C_Z]];
+        $next = [];
+        foreach ($this->itemsOf($candidate) as [$type, $x, $y, $z, $w, $l, $h]) {
+            $next[$type] ??= $this->initialCounts[$type] - $state->counts[$type];
+            $item = $this->itemsByType[$type][$next[$type]++];
+            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
+                return false;
+            }
+            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h));
+        }
+
+        return true;
+    }
+
+    /**
+     * The individual items of a placed block, bottom-up, as [type, x, y, z, width, length, height].
+     *
+     * @param  array<int, int|float>                                               $candidate
+     * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int}>
+     */
+    private function itemsOf(array $candidate): array
+    {
+        $type = $candidate[self::C_TYPE];
+        $x = $candidate[self::C_X];
+        $y = $candidate[self::C_Y];
+        $z = $candidate[self::C_Z];
+        $items = [];
+        [$ow, $ol, $oh, $nx, $ny, $nz] = [$candidate[self::C_OW], $candidate[self::C_OL], $candidate[self::C_OH], $candidate[self::C_NX], $candidate[self::C_NY], $candidate[self::C_NZ]];
         for ($iz = 0; $iz < $nz; ++$iz) {
             for ($iy = 0; $iy < $ny; ++$iy) {
                 for ($ix = 0; $ix < $nx; ++$ix) {
-                    $item = $this->itemsByType[$type][$next++];
-                    assert($item instanceof ConstrainedPlacementItem);
-                    $px = $x + $ix * $ow;
-                    $py = $y + $iy * $ol;
-                    $pz = $z + $iz * $oh;
-                    if (!$item->canBePacked(new PackedBox($this->box, $context), $px, $py, $pz, $ow, $ol, $oh)) {
-                        return false;
-                    }
-                    $context->insert(new PackedItem($item, $px, $py, $pz, $ow, $ol, $oh));
+                    $items[] = [$type, $x + $ix * $ow, $y + $iy * $ol, $z + $iz * $oh, $ow, $ol, $oh];
                 }
             }
         }
 
-        return true;
+        return $items;
     }
 
     private function context(BlockSearchState $state): PackedItemList
@@ -951,22 +966,22 @@ class BlockPacker implements LoggerAwareInterface
         $y2 = $y + $candidate[self::C_L];
         $z2 = $z + $candidate[self::C_H];
         $type = $candidate[self::C_TYPE];
-        $n = $candidate[self::C_NX] * $candidate[self::C_NY] * $candidate[self::C_NZ];
 
         if ($state->context !== null) {
             $next = [$type => $this->initialCounts[$type] - $state->counts[$type]];
             $this->appendItems($state->context, $candidate, $next);
         }
 
+        $n = $candidate[self::C_NX] * $candidate[self::C_NY] * $candidate[self::C_NZ];
         $state->counts[$type] -= $n;
+        $state->remaining -= $n;
+        $state->weightLeft -= $n * $this->weights[$type];
+        $state->tops[$z2][] = [$x, $y, $x2, $y2];
         if ($state->counts[$type] === 0) {
             $this->updateSpaceFilter($state);
         }
         $state->spaces = $this->occupy($state, $x, $y, $z, $x2, $y2, $z2);
-        $state->remaining -= $n;
-        $state->weightLeft -= $n * $this->weights[$type];
         $state->volume += $candidate[self::C_VOLUME];
-        $state->tops[$z2][] = [$x, $y, $x2, $y2];
         $state->placements[] = $candidate;
     }
 
@@ -1068,17 +1083,11 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function appendItems(PackedItemList $list, array $placement, array &$next): void
     {
-        $type = $placement[self::C_TYPE];
-        $index = $next[$type] ?? 0;
-        [$ow, $ol, $oh, $nx, $ny, $nz, $x, $y, $z] = [$placement[self::C_OW], $placement[self::C_OL], $placement[self::C_OH], $placement[self::C_NX], $placement[self::C_NY], $placement[self::C_NZ], $placement[self::C_X], $placement[self::C_Y], $placement[self::C_Z]];
-        for ($iz = 0; $iz < $nz; ++$iz) {
-            for ($iy = 0; $iy < $ny; ++$iy) {
-                for ($ix = 0; $ix < $nx; ++$ix) {
-                    $list->insert(new PackedItem($this->itemsByType[$type][$index++], $x + $ix * $ow, $y + $iy * $ol, $z + $iz * $oh, $ow, $ol, $oh));
-                }
-            }
+        foreach ($this->itemsOf($placement) as [$type, $x, $y, $z, $w, $l, $h]) {
+            $index = $next[$type] ?? 0;
+            $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h));
+            $next[$type] = $index + 1;
         }
-        $next[$type] = $index;
     }
 
     private function materialise(BlockSearchState $state): PackedBox

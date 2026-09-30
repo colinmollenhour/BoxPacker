@@ -25,6 +25,12 @@ use const PHP_INT_MAX;
  */
 class VolumePacker implements LoggerAwareInterface
 {
+    /**
+     * Above this many items the Thorough strategy no longer also runs the fast packer for comparison: on large
+     * loads the block search is consistently denser and the fast packer's run time grows quickly.
+     */
+    private const FAST_COMPARISON_LIMIT = 300;
+
     protected LoggerInterface $logger;
 
     protected ItemList $items;
@@ -43,11 +49,13 @@ class VolumePacker implements LoggerAwareInterface
 
     protected PackingStrategy $strategy = PackingStrategy::Fast;
 
-    protected int $maxBeamWidth = 8;
+    protected int $maxBeamWidth = 16;
+
+    protected ?int $searchBudget = 10000;
 
     protected ?float $searchTimeLimit = null;
 
-    protected float $minimumSupport = 1.0;
+    protected float $minimumSupport = 0.75;
 
     public function __construct(protected Box $box, ItemList $items)
     {
@@ -109,8 +117,18 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
+     * Thorough strategy only: a deterministic cap on search effort, as the number of trial block placements
+     * (default 10,000); the best packing found within it is used. Unlike a time limit, results do not depend on
+     * machine speed. null = no cap.
+     */
+    public function setSearchBudget(?int $placements): void
+    {
+        $this->searchBudget = $placements;
+    }
+
+    /**
      * Thorough strategy only: the minimum fraction (0-1) of each item's base that must rest on the box floor or on
-     * other items. Defaults to 1, i.e. no overhangs.
+     * other items. Defaults to 0.75.
      */
     public function setMinimumSupport(float $fraction): void
     {
@@ -140,25 +158,29 @@ class VolumePacker implements LoggerAwareInterface
             return new PackedBox($this->box, new PackedItemList());
         }
 
-        $fast = $this->packFast();
-
-        return $this->useThorough() ? $this->improve($fast) : $fast;
+        return $this->useThorough() ? $this->packThoroughWithFallback($this->packFast(...)) : $this->packFast();
     }
 
     /**
-     * Thorough strategy: use the block search unless the fast packing already packs everything (and is supported
-     * well enough), keeping whichever of the two is denser.
+     * Thorough strategy: the block search, and for all but very large item lists also the fast packer (keeping
+     * the denser of the two, provided the fast packing is supported well enough) unless the search already packed
+     * everything.
+     *
+     * @param callable(): PackedBox $fastPacker
      */
-    private function improve(PackedBox $fast): PackedBox
+    private function packThoroughWithFallback(callable $fastPacker): PackedBox
     {
-        $fastIsSupported = SupportCalculator::minimumSupport($fast->items) >= $this->minimumSupport;
-        if ($fastIsSupported && $fast->items->count() === $this->items->count()) {
-            return $fast;
+        $thorough = $this->packThorough();
+        if ($thorough->items->count() === $this->items->count() || $this->items->count() > self::FAST_COMPARISON_LIMIT) {
+            return $thorough;
         }
 
-        $thorough = $this->packThorough();
+        $fast = $fastPacker();
+        if (SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
+            return $thorough;
+        }
 
-        return $fastIsSupported ? self::denser($fast, $thorough) : $thorough;
+        return self::denser($fast, $thorough);
     }
 
     /**
@@ -179,6 +201,7 @@ class VolumePacker implements LoggerAwareInterface
         $blockPacker->setLogger($this->logger);
         $blockPacker->setMaxBeamWidth($this->maxBeamWidth);
         $blockPacker->setTimeLimit($this->searchTimeLimit);
+        $blockPacker->setPlacementBudget($this->searchBudget);
         $blockPacker->setMinimumSupport($this->minimumSupport);
 
         return $blockPacker->pack();
@@ -259,10 +282,8 @@ class VolumePacker implements LoggerAwareInterface
             return new PackedBox($this->box, new PackedItemList());
         }
 
-        $fast = $this->packBestSubsetFast();
-
         // the block search already chooses which items to leave out
-        return $this->useThorough() ? $this->improve($fast) : $fast;
+        return $this->useThorough() ? $this->packThoroughWithFallback($this->packBestSubsetFast(...)) : $this->packBestSubsetFast();
     }
 
     private function packBestSubsetFast(): PackedBox
