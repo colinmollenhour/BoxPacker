@@ -369,10 +369,13 @@ class VolumePacker implements LoggerAwareInterface
             $attempt = new self($this->box, $items);
             $attempt->setLogger($this->logger);
             $attempt->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
+            $attempt->setAllowAngledPlacement($this->allowAngledPlacement);
+            $attempt->setMinimumSupport($this->minimumSupport);
             if ($this->packAcrossWidthOnly) {
                 $attempt->packAcrossWidthOnly();
             }
             $packedBox = $attempt->pack();
+            $this->searchPlacements += $attempt->getSearchPlacements();
 
             if ($packedBox->getUsedVolume() > $bestUsedVolume) {
                 $best = $packedBox;

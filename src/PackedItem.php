@@ -20,7 +20,7 @@ use function is_iterable;
  * placement enabled, an item that is too long to fit a box any other way can be turned about the vertical axis:
  * $angle is then the anticlockwise turn (x towards y) in degrees, between 0 and 90, width, length and depth are still
  * the item's own dimensions, and x, y are the minimum corner of its bounding box, which is $boundingWidth ×
- * $boundingLength. Use those (or {@see AngledGeometry::footprint()}) rather than x + width when angles are possible.
+ * $boundingLength. Use those (or {@see getFootprint()}) rather than x + width when angles are possible.
  */
 readonly class PackedItem implements JsonSerializable
 {
@@ -64,6 +64,17 @@ readonly class PackedItem implements JsonSerializable
     public function isAngled(): bool
     {
         return $this->angle != 0.0;
+    }
+
+    /**
+     * The four corners of the item's base as [x, y] pairs, anticlockwise, starting from the one on the bottom (minimum
+     * y) edge of its bounding box. For an item square to the box, that is (x, y), (x + width, y) and so on.
+     *
+     * @return list<array{float, float}>
+     */
+    public function getFootprint(): array
+    {
+        return AngledGeometry::corners($this->x, $this->y, $this->width, $this->length, $this->angle);
     }
 
     public static function fromOrientatedItem(OrientatedItem $orientatedItem, int $x, int $y, int $z): self

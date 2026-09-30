@@ -66,7 +66,7 @@ An angled item is reported like any other ``PackedItem``, with an extra ``angle`
 * ``x``, ``y`` and ``z`` are the minimum corner of the item's bounding box, which is ``boundingWidth`` ×
   ``boundingLength`` (the same as ``width`` × ``length`` for items that are not angled). Use those rather than
   ``x + width`` to find how far an item extends when angled placement is allowed, or
-  ``AngledGeometry::footprint($packedItem)`` for the four corners of its base.
+  ``$packedItem->getFootprint()`` for the four corners of its base.
 * ``isAngled()`` says whether an item is angled.
 * In JSON, ``angle``, ``boundingWidth`` and ``boundingLength`` are included for angled items only. The
   :ref:`visualiser<visualiser>` shows angled items as they are packed.

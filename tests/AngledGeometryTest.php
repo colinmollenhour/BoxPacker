@@ -130,6 +130,11 @@ class AngledGeometryTest extends TestCase
         self::assertSame(100, $angled->boundingWidth);
         self::assertSame(82, $angled->boundingLength);
         self::assertSame(22000, $angled->volume);
+        self::assertSame([[0.0, 0.0], [110.0, 0.0], [110.0, 20.0], [0.0, 20.0]], $straight->getFootprint());
+        $corners = $angled->getFootprint();
+        self::assertEqualsWithDelta([12, 0], $corners[0], 0.0001); // 20·sin 36.87°
+        self::assertEqualsWithDelta([100, 66], $corners[1], 0.0001); // + 110·(cos, sin)
+        self::assertEqualsWithDelta([0, 16], $corners[3], 0.0001); // 20·cos 36.87°
         self::assertArrayHasKey('angle', $angled->jsonSerialize());
         self::assertArrayNotHasKey('angle', $straight->jsonSerialize());
     }

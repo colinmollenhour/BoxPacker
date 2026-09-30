@@ -231,13 +231,13 @@ final class AngledGeometry
     }
 
     /**
-     * Corners of a packed item's footprint.
+     * Corners of a packed item's footprint, see {@see PackedItem::getFootprint()}.
      *
      * @return list<array{float, float}>
      */
     public static function footprint(PackedItem $item): array
     {
-        return self::corners($item->x, $item->y, $item->width, $item->length, $item->angle);
+        return $item->getFootprint();
     }
 
     /**

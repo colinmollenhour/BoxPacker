@@ -58,6 +58,23 @@ class AngledPlacementTest extends TestCase
     }
 
     #[DataProvider('strategies')]
+    public function testBestSubsetAlsoAnglesItems(PackingStrategy $strategy): void
+    {
+        $box = new TestBox('Box', 100, 100, 30, 0, 100, 100, 30, 1000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Rod', 110, 20, 10, 1, Rotation::KeepFlat));
+        $items->insert(new TestItem('Cube', 10, 10, 10, 1, Rotation::KeepFlat), 5);
+
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy($strategy);
+        $packer->setAllowAngledPlacement(true);
+        $packedBox = $packer->packBestSubset();
+
+        self::assertCount(6, $packedBox->items);
+        self::assertSame([], PackingValidator::problems($packedBox));
+    }
+
+    #[DataProvider('strategies')]
     public function testOffByDefault(PackingStrategy $strategy): void
     {
         $box = new TestBox('Box', 100, 100, 30, 0, 100, 100, 30, 1000);
