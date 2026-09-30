@@ -75,6 +75,12 @@ final class Strategies
         if (isset($options['rule'])) {
             $packer->setSpaceRule((int) $options['rule']);
         }
+        if (isset($options['budget'])) {
+            $packer->setPlacementBudget((int) $options['budget']);
+        }
+        if (isset($options['scoring'])) {
+            $packer->setScoring((int) $options['scoring']);
+        }
 
         return $packer;
     }

@@ -13,6 +13,7 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
+use function array_fill;
 use function array_keys;
 use function array_slice;
 use function array_values;
@@ -70,8 +71,6 @@ class BlockPacker implements LoggerAwareInterface
      * same rule as {@see OrientatedItem::isStable()}.
      */
     private const STABILITY_ANGLE = 0.261;
-
-    private const FILL_ORDERS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
 
     private LoggerInterface $logger;
 
@@ -143,6 +142,10 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $greedyRuns = 0;
 
+    private int $placementBudget = PHP_INT_MAX;
+
+    private int $placements = 0;
+
     private int $spaceRule = 0;
 
     /**
@@ -151,6 +154,62 @@ class BlockPacker implements LoggerAwareInterface
     public function setSpaceRule(int $rule): void
     {
         $this->spaceRule = $rule;
+    }
+
+    private int $scoring = 1;
+
+    /**
+     * For each axis, the longest length up to each value that item edges placeable along that axis can add up to.
+     *
+     * @var array{0: list<int>, 1: list<int>, 2: list<int>}
+     */
+    private array $fillable = [[], [], []];
+
+    /**
+     * @internal tuning hook
+     */
+    public function setScoring(int $scoring): void
+    {
+        $this->scoring = $scoring;
+    }
+
+    /**
+     * Precompute, per axis, which lengths can be made exactly from item edges (ignoring quantities), so the
+     * unusable part of a gap left next to a block can be looked up.
+     */
+    private function buildFillableTables(): void
+    {
+        $limits = [$this->boxWidth, $this->boxLength, $this->boxDepth];
+        foreach ([0, 1, 2] as $axis) {
+            $edges = [];
+            foreach ($this->orientations as $type => $orientations) {
+                if ($this->initialCounts[$type] === 0) {
+                    continue;
+                }
+                foreach ($orientations as $orientation) {
+                    $edges[$orientation[$axis]] = true;
+                }
+            }
+            $limit = $limits[$axis];
+            $reachable = array_fill(0, $limit + 1, false);
+            $reachable[0] = true;
+            foreach (array_keys($edges) as $edge) {
+                for ($length = $edge; $length <= $limit; ++$length) {
+                    if (!$reachable[$length] && $reachable[$length - $edge]) {
+                        $reachable[$length] = true;
+                    }
+                }
+            }
+            $best = 0;
+            $table = [];
+            for ($length = 0; $length <= $limit; ++$length) {
+                if ($reachable[$length]) {
+                    $best = $length;
+                }
+                $table[$length] = $best;
+            }
+            $this->fillable[$axis] = $table;
+        }
     }
 
     /**
@@ -247,6 +306,20 @@ class BlockPacker implements LoggerAwareInterface
         $this->timeLimit = $timeLimit;
     }
 
+    /**
+     * Deterministic cap on search effort: the maximum number of trial block placements (across all greedy
+     * completions) before the best packing found so far is returned. Roughly proportional to run time.
+     */
+    public function setPlacementBudget(?int $placements): void
+    {
+        $this->placementBudget = $placements ?? PHP_INT_MAX;
+    }
+
+    public function getPlacements(): int
+    {
+        return $this->placements;
+    }
+
     public function getGreedyRuns(): int
     {
         return $this->greedyRuns;
@@ -254,9 +327,13 @@ class BlockPacker implements LoggerAwareInterface
 
     public function pack(): PackedBox
     {
+        if ($this->scoring === 1) {
+            $this->buildFillableTables();
+        }
         $this->deadline = $this->timeLimit === null ? PHP_INT_MAX : hrtime(true) + (int) ($this->timeLimit * 1e9);
         $this->outOfTime = false;
         $this->greedyRuns = 0;
+        $this->placements = 0;
 
         $root = new BlockSearchState();
         $root->spaces = [[0, 0, 0, $this->boxWidth, $this->boxLength, $this->boxDepth]];
@@ -315,7 +392,7 @@ class BlockPacker implements LoggerAwareInterface
                                 return $best;
                             }
                         }
-                        if (hrtime(true) > $this->deadline) {
+                        if ($this->placements > $this->placementBudget || hrtime(true) > $this->deadline) {
                             $this->outOfTime = true;
 
                             return $best;
@@ -366,7 +443,7 @@ class BlockPacker implements LoggerAwareInterface
             if ($candidates !== []) {
                 return $candidates;
             }
-            unset($state->spaces[$spaceIndex]);
+            $this->retire($state, $spaceIndex);
         }
     }
 
@@ -383,13 +460,27 @@ class BlockPacker implements LoggerAwareInterface
             }
             $candidates = $this->candidates($state, $state->spaces[$spaceIndex], 1);
             if ($candidates === []) {
-                unset($state->spaces[$spaceIndex]);
+                $this->retire($state, $spaceIndex);
                 continue;
             }
             $this->place($state, $candidates[0]);
         }
 
         return $state;
+    }
+
+    /**
+     * Nothing can go into this space right now. A space on the floor never becomes usable again (it can only
+     * shrink and fewer items remain), but a raised one may once more supporting items are placed at its level,
+     * so it is kept as dormant: still part of the free space bookkeeping, but not selected.
+     */
+    private function retire(BlockSearchState $state, int $spaceIndex): void
+    {
+        if ($state->spaces[$spaceIndex][2] === 0) {
+            unset($state->spaces[$spaceIndex]);
+        } else {
+            $state->spaces[$spaceIndex][6] = true;
+        }
     }
 
     /**
@@ -405,6 +496,9 @@ class BlockPacker implements LoggerAwareInterface
         $boxLength = $this->boxLength;
         $rule = $this->spaceRule;
         foreach ($state->spaces as $index => $space) {
+            if (isset($space[6])) {
+                continue; // dormant until new support appears
+            }
             $dx = min($space[0], $boxWidth - $space[3]);
             $dy = min($space[1], $boxLength - $space[4]);
             $dz = $space[2];
@@ -439,21 +533,61 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function candidates(BlockSearchState $state, array $space, int $limit): array
     {
+        $lowX = $space[0] <= $this->boxWidth - $space[3];
+        $lowY = $space[1] <= $this->boxLength - $space[4];
+        $candidates = $this->candidatesAt($state, $space, $limit, $lowX, $lowY);
+        if ($candidates !== [] || $space[2] === 0) {
+            return $candidates;
+        }
+
+        // A raised space may be supported at one of its other bottom corners even if not at the preferred one
+        foreach ([[$lowX, !$lowY], [!$lowX, $lowY], [!$lowX, !$lowY]] as [$cornerX, $cornerY]) {
+            $candidates = $this->candidatesAt($state, $space, $limit, $cornerX, $cornerY);
+            if ($candidates !== []) {
+                return $candidates;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Blocks that can go into the given bottom corner of this space, best first.
+     *
+     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int} $space
+     * @return list<array<int, int|float>>
+     */
+    private function candidatesAt(BlockSearchState $state, array $space, int $limit, bool $lowX, bool $lowY): array
+    {
         [$x1, $y1, $z1, $x2, $y2, $z2] = $space;
         $spaceHeight = $z2 - $z1;
-        $lowX = $x1 <= $this->boxWidth - $x2;
-        $lowY = $y1 <= $this->boxLength - $y2;
+        $spaceWidth = $x2 - $x1;
+        $spaceLength = $y2 - $y1;
+        $scoring = $this->scoring;
+        [$fillX, $fillY, $fillZ] = $this->fillable;
 
-        // Footprint limits within which a block placed at the anchor corner is supported
+        // Footprint limits [width, length, check support, max area] within which a block at the corner can go
         if ($z1 === 0) {
-            $footprints = [[$x2 - $x1, $y2 - $y1, false]];
+            $footprints = [[$x2 - $x1, $y2 - $y1, false, PHP_INT_MAX]];
         } else {
-            $footprints = [];
-            foreach ($this->supportStaircase($state->tops[$z1] ?? [], $x1, $y1, $x2, $y2, $lowX, $lowY) as [$w, $l]) {
-                $footprints[] = [$w, $l, false];
+            $tops = $state->tops[$z1] ?? [];
+            if ($tops === []) {
+                return [];
             }
+            $footprints = [];
+            // fully supported blocks must lie within a covered rectangle starting at the corner
+            if (self::covers($tops, $lowX ? $x1 : $x2 - 1, $lowY ? $y1 : $y2 - 1)) {
+                foreach ($this->supportStaircase($tops, $x1, $y1, $x2, $y2, $lowX, $lowY) as [$w, $l]) {
+                    $footprints[] = [$w, $l, false, PHP_INT_MAX];
+                }
+            }
+            // when overhangs are allowed, larger blocks are possible but need checking; they can be no bigger than
+            // the supporting area within the space allows
             if ($this->minSupport < 1.0) {
-                $footprints[] = [$x2 - $x1, $y2 - $y1, true]; // overhang allowed, check each block's support
+                $supportable = self::supportedArea($tops, $x1, $y1, $x2, $y2);
+                if ($supportable > 0) {
+                    $footprints[] = [$x2 - $x1, $y2 - $y1, true, $supportable / $this->minSupport];
+                }
             }
             if ($footprints === []) {
                 return [];
@@ -489,7 +623,7 @@ class BlockPacker implements LoggerAwareInterface
                     continue;
                 }
                 $mz = intdiv($spaceHeight, $oh);
-                foreach ($footprints as [$maxWidth, $maxLength, $checkSupport]) {
+                foreach ($footprints as [$maxWidth, $maxLength, $checkSupport, $maxArea]) {
                     if ($ow > $maxWidth || $ol > $maxLength) {
                         continue;
                     }
@@ -497,21 +631,48 @@ class BlockPacker implements LoggerAwareInterface
                     $my = intdiv($maxLength, $ol);
                     if ($mx * $my * $mz <= $count) {
                         $variants = [[$mx, $my, $mz]];
+                    } elseif ($count === 1) {
+                        $variants = [[1, 1, 1]];
                     } else {
-                        $variants = [];
-                        $max = [$mx, $my, $mz];
-                        foreach (self::FILL_ORDERS as [$a, $b, $c]) {
-                            $n = [0, 0, 0];
-                            $n[$a] = min($max[$a], $count);
-                            $n[$b] = min($max[$b], intdiv($count, $n[$a]));
-                            $n[$c] = min($max[$c], intdiv($count, $n[$a] * $n[$b]));
-                            $variants[$n[0] . ',' . $n[1] . ',' . $n[2]] = $n;
-                        }
+                        // not enough for a full block: fill as many as possible along a first axis, then a second,
+                        // then the third, for each order of axes
+                        $key = $count + 1;
+                        $nx = min($mx, $count);
+                        $ny = min($my, intdiv($count, $nx));
+                        $nz = min($mz, intdiv($count, $nx * $ny));
+                        $variants = [$nx + $key * ($ny + $key * $nz) => [$nx, $ny, $nz]];
+                        $nz = min($mz, intdiv($count, $nx));
+                        $ny = min($my, intdiv($count, $nx * $nz));
+                        $variants[$nx + $key * ($ny + $key * $nz)] = [$nx, $ny, $nz];
+                        $ny = min($my, $count);
+                        $nx = min($mx, intdiv($count, $ny));
+                        $nz = min($mz, intdiv($count, $nx * $ny));
+                        $variants[$nx + $key * ($ny + $key * $nz)] = [$nx, $ny, $nz];
+                        $nz = min($mz, intdiv($count, $ny));
+                        $nx = min($mx, intdiv($count, $ny * $nz));
+                        $variants[$nx + $key * ($ny + $key * $nz)] = [$nx, $ny, $nz];
+                        $nz = min($mz, $count);
+                        $nx = min($mx, intdiv($count, $nz));
+                        $ny = min($my, intdiv($count, $nx * $nz));
+                        $variants[$nx + $key * ($ny + $key * $nz)] = [$nx, $ny, $nz];
+                        $ny = min($my, intdiv($count, $nz));
+                        $nx = min($mx, intdiv($count, $ny * $nz));
+                        $variants[$nx + $key * ($ny + $key * $nz)] = [$nx, $ny, $nz];
                     }
 
                     foreach ($variants as [$nx, $ny, $nz]) {
                         $blockVolume = $nx * $ny * $nz * $volume;
-                        $score = $blockVolume;
+                        if ($scoring === 1) {
+                            $w = $nx * $ow;
+                            $l = $ny * $ol;
+                            $h = $nz * $oh;
+                            $rx = $spaceWidth - $w;
+                            $ry = $spaceLength - $l;
+                            $rz = $spaceHeight - $h;
+                            $score = $blockVolume - ($rx - $fillX[$rx]) * $l * $h - ($ry - $fillY[$ry]) * $w * $h - ($rz - $fillZ[$rz]) * $w * $l;
+                        } else {
+                            $score = $blockVolume;
+                        }
                         if ($tracked && $score <= $bestScore) {
                             continue;
                         }
@@ -519,7 +680,7 @@ class BlockPacker implements LoggerAwareInterface
                         $l = $ny * $ol;
                         $x = $lowX ? $x1 : $x2 - $w;
                         $y = $lowY ? $y1 : $y2 - $l;
-                        if ($checkSupport && !$this->isSupported($state, $x, $y, $z1, $ow, $ol, $nx, $ny)) {
+                        if ($checkSupport && ($w * $l > $maxArea || !$this->isSupported($state, $x, $y, $z1, $ow, $ol, $nx, $ny))) {
                             continue;
                         }
                         $candidate = [$score, $blockVolume, $w, $l, $nz * $oh, $type, $ow, $ol, $oh, $nx, $ny, $nz, $x, $y, $z1];
@@ -698,6 +859,22 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
+     * Whether the unit square at x, y is covered by one of the rectangles.
+     *
+     * @param list<array{0: int, 1: int, 2: int, 3: int}> $tops
+     */
+    private static function covers(array $tops, int $x, int $y): bool
+    {
+        foreach ($tops as [$rx1, $ry1, $rx2, $ry2]) {
+            if ($x >= $rx1 && $x < $rx2 && $y >= $ry1 && $y < $ry2) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param list<array{0: int, 1: int, 2: int, 3: int}> $tops
      */
     private static function supportedArea(array $tops, int $x1, int $y1, int $x2, int $y2): int
@@ -766,6 +943,7 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function place(BlockSearchState $state, array $candidate): void
     {
+        ++$this->placements;
         $x = $candidate[self::C_X];
         $y = $candidate[self::C_Y];
         $z = $candidate[self::C_Z];
@@ -800,55 +978,85 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function occupy(BlockSearchState $state, int $bx1, int $by1, int $bz1, int $bx2, int $by2, int $bz2): array
     {
+        // A piece left over on one side of the block spans its parent space in the other two axes, which overlap
+        // the block, so it can only lie inside another piece from the same side or inside an untouched space whose
+        // face is flush with that side of the block. Only those need comparing.
         $kept = [];
-        $pieces = [];
+        $flush = [[], [], [], [], [], []];
+        $pieces = [[], [], [], [], [], []];
         foreach ($state->spaces as $space) {
             if ($bx1 >= $space[3] || $bx2 <= $space[0] || $by1 >= $space[4] || $by2 <= $space[1] || $bz1 >= $space[5] || $bz2 <= $space[2]) {
+                // a dormant space resting on the new block's top may now be usable
+                if (isset($space[6]) && $space[2] === $bz2 && $bx1 < $space[3] && $bx2 > $space[0] && $by1 < $space[4] && $by2 > $space[1]) {
+                    unset($space[6]);
+                }
                 $kept[] = $space;
+                if ($space[3] === $bx1) {
+                    $flush[0][] = $space;
+                }
+                if ($space[0] === $bx2) {
+                    $flush[1][] = $space;
+                }
+                if ($space[4] === $by1) {
+                    $flush[2][] = $space;
+                }
+                if ($space[1] === $by2) {
+                    $flush[3][] = $space;
+                }
+                if ($space[5] === $bz1) {
+                    $flush[4][] = $space;
+                }
+                if ($space[2] === $bz2) {
+                    $flush[5][] = $space;
+                }
                 continue;
             }
             [$x1, $y1, $z1, $x2, $y2, $z2] = $space;
+            $dormant = isset($space[6]); // pieces of a dormant space stay dormant, except the new one above the block
             if ($bx1 > $x1) {
-                $pieces[] = [$x1, $y1, $z1, $bx1, $y2, $z2];
+                $pieces[0][] = $dormant ? [$x1, $y1, $z1, $bx1, $y2, $z2, true] : [$x1, $y1, $z1, $bx1, $y2, $z2];
             }
             if ($bx2 < $x2) {
-                $pieces[] = [$bx2, $y1, $z1, $x2, $y2, $z2];
+                $pieces[1][] = $dormant ? [$bx2, $y1, $z1, $x2, $y2, $z2, true] : [$bx2, $y1, $z1, $x2, $y2, $z2];
             }
             if ($by1 > $y1) {
-                $pieces[] = [$x1, $y1, $z1, $x2, $by1, $z2];
+                $pieces[2][] = $dormant ? [$x1, $y1, $z1, $x2, $by1, $z2, true] : [$x1, $y1, $z1, $x2, $by1, $z2];
             }
             if ($by2 < $y2) {
-                $pieces[] = [$x1, $by2, $z1, $x2, $y2, $z2];
+                $pieces[3][] = $dormant ? [$x1, $by2, $z1, $x2, $y2, $z2, true] : [$x1, $by2, $z1, $x2, $y2, $z2];
             }
             if ($bz1 > $z1) {
-                $pieces[] = [$x1, $y1, $z1, $x2, $y2, $bz1];
+                $pieces[4][] = $dormant ? [$x1, $y1, $z1, $x2, $y2, $bz1, true] : [$x1, $y1, $z1, $x2, $y2, $bz1];
             }
             if ($bz2 < $z2) {
-                $pieces[] = [$x1, $y1, $bz2, $x2, $y2, $z2];
+                $pieces[5][] = [$x1, $y1, $bz2, $x2, $y2, $z2];
             }
         }
 
         $minFootprintEdge = $state->minFootprintEdge;
         $minHeight = $state->minHeight;
         $minVolume = $state->minVolume;
-        $pieceCount = count($pieces);
-        for ($i = 0; $i < $pieceCount; ++$i) {
-            [$x1, $y1, $z1, $x2, $y2, $z2] = $pieces[$i];
-            if ($x2 - $x1 < $minFootprintEdge || $y2 - $y1 < $minFootprintEdge || $z2 - $z1 < $minHeight || ($x2 - $x1) * ($y2 - $y1) * ($z2 - $z1) < $minVolume) {
-                continue;
-            }
-            foreach ($kept as $other) {
-                if ($other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2) {
-                    continue 2;
+        foreach ($pieces as $side => $sidePieces) {
+            $pieceCount = count($sidePieces);
+            for ($i = 0; $i < $pieceCount; ++$i) {
+                [$x1, $y1, $z1, $x2, $y2, $z2] = $sidePieces[$i];
+                if ($x2 - $x1 < $minFootprintEdge || $y2 - $y1 < $minFootprintEdge || $z2 - $z1 < $minHeight || ($x2 - $x1) * ($y2 - $y1) * ($z2 - $z1) < $minVolume) {
+                    continue;
                 }
-            }
-            for ($j = $i + 1; $j < $pieceCount; ++$j) {
-                $other = $pieces[$j];
-                if ($other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2) {
-                    continue 2; // contained in (or equal to) a later piece, which will be kept or dropped on its own merits
+                foreach ($flush[$side] as $other) {
+                    if ($other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2) {
+                        continue 2;
+                    }
                 }
+                for ($j = 0; $j < $pieceCount; ++$j) {
+                    $other = $sidePieces[$j];
+                    if ($j !== $i && $other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2
+                        && ($j > $i || $other[0] !== $x1 || $other[1] !== $y1 || $other[2] !== $z1 || $other[3] !== $x2 || $other[4] !== $y2 || $other[5] !== $z2)) {
+                        continue 2; // inside another piece (of identical pieces, only the last is kept)
+                    }
+                }
+                $kept[] = $sidePieces[$i];
             }
-            $kept[] = $pieces[$i];
         }
 
         return $kept;
