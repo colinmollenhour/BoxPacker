@@ -19,6 +19,7 @@ use WeakMap;
 use function array_pop;
 use function count;
 use function max;
+use function min;
 use function usort;
 
 use const PHP_INT_MAX;
@@ -218,7 +219,7 @@ class Packer implements LoggerAwareInterface
      */
     public function setMinimumSupport(float $fraction): void
     {
-        $this->minimumSupport = $fraction;
+        $this->minimumSupport = max(0.0, min(1.0, $fraction));
     }
 
     /**
@@ -287,14 +288,16 @@ class Packer implements LoggerAwareInterface
         $fastPacker = $this->items->count() <= self::FAST_COMPARISON_LIMIT ? $this->packFastForComparison() : null;
 
         $packedBoxes = new PackedBoxList($this->packedBoxSorter);
-        $packedBoxes->insertFromArray($thoroughPacker->pack($this->items, $this->throwOnUnpackableItem));
+        $packedBoxes->insertFromArray($thoroughPacker->pack($this->items, false));
 
         // keep the fast packer's boxes if they are better (and supported well enough)
         if ($fastPacker !== null) {
             $fastBoxes = $fastPacker->doBasicPacking();
             $fastIsSupported = true;
             foreach ($fastBoxes as $fastBox) {
-                $fastIsSupported = $fastIsSupported && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
+                $fastIsSupported = $fastIsSupported
+                    && $fastBox->getWeight() <= $fastBox->box->getMaxWeight()
+                    && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
             }
             $unpackedDecider = $fastPacker->items->count() <=> $this->items->count();
             if ($fastIsSupported && ($unpackedDecider < 0 || ($unpackedDecider === 0 && $thoroughPacker->compareSolutions($fastBoxes, $packedBoxes) < 0))) {
@@ -304,6 +307,13 @@ class Packer implements LoggerAwareInterface
                     $this->boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
                 }
             }
+        }
+
+        if ($this->items->count() > 0) {
+            if ($this->throwOnUnpackableItem) {
+                throw new NoBoxesAvailableException("No boxes could be found for item '{$this->items->top()->getDescription()}'", $this->items);
+            }
+            $this->logger->log(LogLevel::INFO, "{$this->items->count()} unpackable items found");
         }
 
         if ($packedBoxes->count() > 1 && $packedBoxes->count() <= $this->maxBoxesToBalanceWeight) {
@@ -327,9 +337,15 @@ class Packer implements LoggerAwareInterface
      */
     private function packFastForComparison(): self
     {
-        $packer = new self(clone $this->items, new BoxList(), $this->packedBoxSorter);
-        $packer->setBoxes($this->boxes);
+        $boxes = new BoxList();
         foreach ($this->boxes as $box) {
+            if ($box->getMaxWeight() >= $box->getEmptyWeight()) { // unusable box types are skipped by the thorough search too
+                $boxes->insert($box);
+            }
+        }
+        $packer = new self(clone $this->items, new BoxList(), $this->packedBoxSorter);
+        $packer->setBoxes($boxes);
+        foreach ($boxes as $box) {
             $packer->setBoxQuantity($box, $this->boxQuantitiesAvailable[$box]);
         }
         $packer->throwOnUnpackableItem(false);

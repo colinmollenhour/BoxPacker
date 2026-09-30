@@ -224,6 +224,22 @@ class ThoroughPackerTest extends TestCase
         self::assertSame(['Single', 'Single'], self::boxReferences($custom->pack()));
     }
 
+    public function testDoesNotThrowWhenRunningShortOfALimitedBoxCanBeAvoided(): void
+    {
+        // filling greedily uses up the one big box early; the fast packer's solution shows everything fits
+        $packer = self::thoroughPacker();
+        $packer->setMinimumSupport(0.5);
+        $packer->addBox(new LimitedSupplyTestBox('A', 10, 10, 10, 0, 10, 10, 10, 1000, 1));
+        $packer->addBox(new TestBox('B', 10, 10, 2, 0, 10, 10, 2, 1000));
+        $packer->addItem(new TestItem('X', 10, 10, 9, 1, Rotation::KeepFlat));
+        $packer->addItem(new TestItem('S', 10, 10, 2, 1, Rotation::KeepFlat), 5);
+
+        $packedBoxes = $packer->pack();
+
+        self::assertSame(6, self::itemCount($packedBoxes));
+        self::assertCount(0, $packer->getUnpackedItems());
+    }
+
     public function testUnpackableItemsAreLeftUnpackedWhenNotThrowing(): void
     {
         $packer = self::thoroughPacker();

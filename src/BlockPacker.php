@@ -30,6 +30,7 @@ use function spl_object_id;
 use function usort;
 
 use const PHP_INT_MAX;
+use const PHP_INT_MIN;
 
 /**
  * Single-container packer that builds the load out of blocks of identical items.
@@ -75,6 +76,8 @@ class BlockPacker implements LoggerAwareInterface
      * Largest box dimension for which per-axis fillable length tables are built.
      */
     private const MAX_FILLABLE_TABLE = 50000;
+
+    private const FILLABLE_CACHE_SIZE = 64;
 
     private LoggerInterface $logger;
 
@@ -179,6 +182,13 @@ class BlockPacker implements LoggerAwareInterface
     private array $fillable = [[], [], []];
 
     /**
+     * Fillable length tables already built, by length and item edges (a Packer packs the same box and items many times).
+     *
+     * @var array<string, list<int>>
+     */
+    private static array $fillableCache = [];
+
+    /**
      * @internal tuning hook
      */
     public function setScoring(int $scoring): void
@@ -209,6 +219,12 @@ class BlockPacker implements LoggerAwareInterface
                 }
             }
             $limit = $limits[$axis];
+            ksort($edges);
+            $cacheKey = $limit . ':' . implode(',', array_keys($edges));
+            if (isset(self::$fillableCache[$cacheKey])) {
+                $this->fillable[$axis] = self::$fillableCache[$cacheKey];
+                continue;
+            }
             $reachable = array_fill(0, $limit + 1, false);
             $reachable[0] = true;
             foreach (array_keys($edges) as $edge) {
@@ -227,6 +243,10 @@ class BlockPacker implements LoggerAwareInterface
                 $table[$length] = $best;
             }
             $this->fillable[$axis] = $table;
+            if (count(self::$fillableCache) >= self::FILLABLE_CACHE_SIZE) {
+                self::$fillableCache = [];
+            }
+            self::$fillableCache[$cacheKey] = $table;
         }
     }
 
@@ -305,7 +325,7 @@ class BlockPacker implements LoggerAwareInterface
      */
     public function setMinimumSupport(float $minSupport): void
     {
-        $this->minSupport = $minSupport;
+        $this->minSupport = max(0.0, min(1.0, $minSupport));
     }
 
     /**
@@ -363,7 +383,7 @@ class BlockPacker implements LoggerAwareInterface
         $best = $rootCompleted;
 
         $this->budgetExhausted = false;
-        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->budgetExhausted && !$this->outOfTime; $width *= 2) {
+        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->budgetExhausted && !$this->outOfTime; $width = $width < $this->maxBeamWidth && $width * 2 > $this->maxBeamWidth ? $this->maxBeamWidth : $width * 2) {
             $best = $this->beamSearch($root, $rootCompleted, $width, $best);
         }
 
@@ -662,7 +682,7 @@ class BlockPacker implements LoggerAwareInterface
         $greedy = $limit === 1;
         $candidates = [];
         $best = null;
-        $bestScore = -1;
+        $bestScore = PHP_INT_MIN;
         $weightLeft = $state->weightLeft;
         foreach ($state->counts as $type => $count) {
             if ($count === 0) {
@@ -977,8 +997,11 @@ class BlockPacker implements LoggerAwareInterface
         foreach ($this->itemsOf($candidate) as [$type, $x, $y, $z, $w, $l, $h]) {
             $next[$type] ??= $this->initialCounts[$type] - $state->counts[$type];
             $item = $this->itemsByType[$type][$next[$type]++];
-            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
-                return false;
+            if ($item instanceof ConstrainedPlacementItem) {
+                ++$this->placements; // callbacks can be costly, so count them against the search budget too
+                if (!$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
+                    return false;
+                }
             }
             $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h));
         }

@@ -182,6 +182,8 @@ class ThoroughPacker implements LoggerAwareInterface
         foreach ($this->boxTypes as $box) {
             $this->boxQuantitiesAvailable[$box] = $this->available[spl_object_id($box)];
         }
+        $this->volumePackerFactory->setCallBudget(null);
+        $this->volumePackerFactory->setCallTimeLimit(null);
 
         return $solution;
     }

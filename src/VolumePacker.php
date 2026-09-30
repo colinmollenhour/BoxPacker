@@ -14,6 +14,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 use function max;
+use function min;
 use function reset;
 use function sort;
 use function usort;
@@ -134,7 +135,7 @@ class VolumePacker implements LoggerAwareInterface
      */
     public function setMinimumSupport(float $fraction): void
     {
-        $this->minimumSupport = $fraction;
+        $this->minimumSupport = max(0.0, min(1.0, $fraction));
     }
 
     /**
@@ -178,7 +179,7 @@ class VolumePacker implements LoggerAwareInterface
         }
 
         $fast = $fastPacker();
-        if (SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
+        if ($fast->getWeight() > $fast->box->getMaxWeight() || SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
             return $thorough;
         }
 
@@ -194,7 +195,22 @@ class VolumePacker implements LoggerAwareInterface
             && !$this->singlePassMode
             && !$this->beStrictAboutItemOrdering
             && !$this->packAcrossWidthOnly
-            && $this->items->count() > 0;
+            && $this->items->count() > 0
+            && !$this->hasFlatItems();
+    }
+
+    /**
+     * Whether any item has a zero dimension (the block search works in volumes and counts per length).
+     */
+    private function hasFlatItems(): bool
+    {
+        foreach ($this->items as $item) {
+            if ($item->getWidth() === 0 || $item->getLength() === 0 || $item->getDepth() === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function packThorough(): PackedBox

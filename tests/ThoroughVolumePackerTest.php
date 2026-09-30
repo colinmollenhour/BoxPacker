@@ -160,6 +160,69 @@ class ThoroughVolumePackerTest extends TestCase
         }
     }
 
+    public function testItemsWithAZeroDimensionArePacked(): void
+    {
+        $box = new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Sheet', 10, 10, 0, 1, Rotation::BestFit), 2);
+        $items->insert(new TestItem('Cube', 10, 10, 10, 1, Rotation::BestFit));
+
+        self::assertCount(3, self::thorough($box, $items)->items);
+    }
+
+    public function testGreedyOnlySearchStillPlacesAnItemThatLeavesUnusableSpace(): void
+    {
+        // a single large cube leaves gaps no item can use, so its score is negative
+        $box = new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Cube', 60, 60, 60, 1, Rotation::BestFit));
+
+        self::assertCount(1, self::thorough($box, $items, 1)->items);
+    }
+
+    public function testPlacementCallbacksCountTowardsTheSearchBudget(): void
+    {
+        $counting = new class('Battery', 4, 15, 5, 1, Rotation::BestFit) extends TestItem implements ConstrainedPlacementItem {
+            public static int $calls = 0;
+
+            public function canBePacked(PackedBox $packedBox, int $proposedX, int $proposedY, int $proposedZ, int $width, int $length, int $depth): bool
+            {
+                ++self::$calls;
+                $alreadyPacked = 0;
+                foreach ($packedBox->items as $packedItem) {
+                    $alreadyPacked += $packedItem->item instanceof self ? 1 : 0;
+                }
+
+                return $alreadyPacked < 3;
+            }
+        };
+        $box = new TestBox('Box', 31, 22, 39, 0, 31, 22, 39, 10000);
+        $items = new ItemList();
+        for ($i = 0; $i < 40; ++$i) {
+            $items->insert(clone $counting);
+        }
+        $items->insert(new TestItem('Book', 6, 19, 17, 1, Rotation::BestFit), 5);
+
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setSearchBudget(2000);
+        $packedBox = $packer->pack();
+
+        self::assertLessThan(5000, $counting::$calls);
+        self::assertCount(8, $packedBox->items);
+    }
+
+    public function testFastNeverReusesAnOrientationTheItemDoesNotAllow(): void
+    {
+        // the second item has the same dimensions as the first, which is stood on its edge, but must be kept flat
+        $box = new TestBox('Box', 35, 11, 27, 11, 35, 11, 27, 369);
+        $items = ItemList::fromArray([new TestItem('Free', 18, 23, 2, 46, Rotation::BestFit), new TestItem('Flat', 23, 18, 2, 52, Rotation::KeepFlat)]);
+
+        $packedBox = (new VolumePacker($box, $items))->pack();
+
+        self::assertSame([], PackingValidator::problems($packedBox));
+    }
+
     public function testEmptyItemListGivesEmptyBox(): void
     {
         $box = new TestBox('Box', 10, 10, 10, 0, 10, 10, 10, 100);
