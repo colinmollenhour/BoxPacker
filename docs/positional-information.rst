@@ -30,4 +30,7 @@ Example:
             }
         }
 
+If :doc:`angled placement<angled-placement>` is enabled, an item may be turned about the vertical axis: its ``angle``
+is then non-zero, x and y are the corner of its bounding box and ``boundingWidth`` × ``boundingLength`` its extent.
+
 A :ref:`visualiser<visualiser>` is also available.

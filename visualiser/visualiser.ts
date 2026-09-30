@@ -100,7 +100,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 number,
                 number,
                 number,
-                [number, number, number, number, number, number, number][],
+                [number, number, number, number, number, number, number, number?][],
             ],
         ) => {
             const packedItems: PackedItem[] = [];
@@ -114,6 +114,7 @@ document.addEventListener("DOMContentLoaded", function () {
                         number,
                         number,
                         number,
+                        number?,
                     ],
                 ) => {
                     packedItems.push(
@@ -125,6 +126,7 @@ document.addEventListener("DOMContentLoaded", function () {
                             packedItem[4],
                             packedItem[5],
                             packedItem[6],
+                            packedItem[7] ?? 0,
                         ),
                     );
                 },
@@ -279,6 +281,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 "x: " + packedItem.x,
                 "y: " + packedItem.y,
                 "z: " + packedItem.z,
+                ...(packedItem.angle !== 0
+                    ? ["Angle: " + packedItem.angle.toFixed(1) + "°"]
+                    : []),
             ].join("\n");
         };
 
@@ -566,15 +571,19 @@ document.addEventListener("DOMContentLoaded", function () {
                 itemMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND;
                 itemMaterial.needDepthPrePass = true;
                 drawnItem.material = itemMaterial;
-                // Same centre-vs-corner adjustment as the outer box.
+                // Same centre-vs-corner adjustment as the outer box. An angled
+                // item is positioned by its bounding box, then turned about its
+                // centre (anticlockwise from x towards y, which is negative in
+                // Babylon's left-handed coordinates).
                 drawnItem.position.x =
                     boxPlacementX +
-                    (scale * packedItem.width) / 2 +
+                    (scale * packedItem.boundingWidth()) / 2 +
                     scale * packedItem.x;
                 drawnItem.position.z =
                     boxPlacementZ +
-                    (scale * packedItem.length) / 2 +
+                    (scale * packedItem.boundingLength()) / 2 +
                     scale * packedItem.y;
+                drawnItem.rotation.y = (-packedItem.angle * Math.PI) / 180;
                 drawnItem.position.y =
                     (scale * packedItem.depth) / 2 + scale * packedItem.z;
 
@@ -654,11 +663,24 @@ class PackedBox {
 class PackedItem {
     constructor(
         public readonly itemKey: number,
+        // x, y are the minimum corner of the item's bounding box
         public readonly x: number,
         public readonly y: number,
         public readonly z: number,
         public readonly width: number,
         public readonly length: number,
         public readonly depth: number,
+        // anticlockwise turn from x towards y, in degrees (0-90)
+        public readonly angle: number = 0,
     ) {}
+
+    boundingWidth(): number {
+        const angle = (this.angle * Math.PI) / 180;
+        return this.width * Math.cos(angle) + this.length * Math.sin(angle);
+    }
+
+    boundingLength(): number {
+        const angle = (this.angle * Math.PI) / 180;
+        return this.width * Math.sin(angle) + this.length * Math.cos(angle);
+    }
 }

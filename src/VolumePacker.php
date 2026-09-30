@@ -58,6 +58,8 @@ class VolumePacker implements LoggerAwareInterface
 
     protected float $minimumSupport = 0.5;
 
+    protected bool $allowAngledPlacement = false;
+
     private int $searchPlacements = 0;
 
     public function __construct(protected Box $box, ItemList $items)
@@ -162,7 +164,57 @@ class VolumePacker implements LoggerAwareInterface
             return new PackedBox($this->box, new PackedItemList());
         }
 
-        return $this->useThorough() ? $this->packThoroughWithFallback($this->packFast(...)) : $this->packFast();
+        if ($this->useThorough()) {
+            return $this->packThoroughWithFallback($this->packFast(...));
+        }
+
+        return $this->needsAngledPlacement() ? $this->packAngledFast() : $this->packFast();
+    }
+
+    /**
+     * Allow an item that is too long to fit the box any other way to be turned about the vertical axis just enough to
+     * fit, sitting at an angle to the sides of the box (see {@see PackedItem::$angle}). Identical angled items are
+     * laid parallel to each other and other items can use the empty corners beside them. Items that must not be
+     * rotated (Rotation::Never) and items with placement callbacks are never angled. With the Fast strategy, a box
+     * that needs an angled item is packed by a quick (greedy) run of the Thorough strategy's block search.
+     */
+    public function setAllowAngledPlacement(bool $allow): void
+    {
+        $this->allowAngledPlacement = $allow;
+    }
+
+    /**
+     * Fast strategy with angled placement allowed: whether some item only fits this box at an angle, in which case
+     * the layer packer (which cannot angle items) is not enough.
+     */
+    private function needsAngledPlacement(): bool
+    {
+        if (!$this->allowAngledPlacement || $this->singlePassMode || $this->beStrictAboutItemOrdering || $this->packAcrossWidthOnly) {
+            return false;
+        }
+        foreach ($this->items as $item) {
+            if (AngledGeometry::onlyFitsAngled($item, $this->box)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * A greedy block search (with angled placement) or the layer packer, whichever packs more.
+     */
+    private function packAngledFast(): PackedBox
+    {
+        $blockPacker = new BlockPacker($this->box, $this->items);
+        $blockPacker->setLogger($this->logger);
+        $blockPacker->setMaxBeamWidth(1);
+        $blockPacker->setMinimumSupport($this->minimumSupport);
+        $blockPacker->setAllowAngledPlacement(true);
+        $angled = $blockPacker->pack();
+        $this->searchPlacements += $blockPacker->getPlacements();
+
+        return self::denser($this->packFast(), $angled);
     }
 
     /**
@@ -207,6 +259,7 @@ class VolumePacker implements LoggerAwareInterface
         $blockPacker->setTimeLimit($this->searchTimeLimit);
         $blockPacker->setPlacementBudget($this->searchBudget);
         $blockPacker->setMinimumSupport($this->minimumSupport);
+        $blockPacker->setAllowAngledPlacement($this->allowAngledPlacement);
         $packedBox = $blockPacker->pack();
         $this->searchPlacements += $blockPacker->getPlacements();
 

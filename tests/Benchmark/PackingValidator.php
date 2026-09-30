@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace DVDoug\BoxPacker\Benchmark;
 
+use DVDoug\BoxPacker\AngledGeometry;
 use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedItem;
 use DVDoug\BoxPacker\Rotation;
@@ -16,7 +17,6 @@ use DVDoug\BoxPacker\Test\BischoffConstrainedTestItem;
 
 use function count;
 use function iterator_to_array;
-use function max;
 use function min;
 use function sort;
 
@@ -42,7 +42,7 @@ final class PackingValidator
         $count = count($items);
         for ($i = 0; $i < $count; ++$i) {
             $a = $items[$i];
-            if ($a->x < 0 || $a->y < 0 || $a->z < 0 || $a->x + $a->width > $box->getInnerWidth() || $a->y + $a->length > $box->getInnerLength() || $a->z + $a->depth > $box->getInnerDepth()) {
+            if ($a->x < 0 || $a->y < 0 || $a->z < 0 || $a->z + $a->depth > $box->getInnerDepth() || !AngledGeometry::withinRectangle(AngledGeometry::footprint($a), $box->getInnerWidth(), $box->getInnerLength())) {
                 $problems[] = "item {$i} out of bounds";
             }
             if (!self::orientationAllowed($a)) {
@@ -53,9 +53,8 @@ final class PackingValidator
             }
             for ($j = $i + 1; $j < $count; ++$j) {
                 $b = $items[$j];
-                if ($a->x < $b->x + $b->width && $b->x < $a->x + $a->width
-                    && $a->y < $b->y + $b->length && $b->y < $a->y + $a->length
-                    && $a->z < $b->z + $b->depth && $b->z < $a->z + $a->depth) {
+                if ($a->z < $b->z + $b->depth && $b->z < $a->z + $a->depth
+                    && AngledGeometry::polygonsOverlap(AngledGeometry::footprint($a), AngledGeometry::footprint($b))) {
                     $problems[] = "items {$i} and {$j} overlap";
                 }
             }
@@ -81,11 +80,7 @@ final class PackingValidator
                 if ($other->z + $other->depth !== $item->z || $other->z >= $item->z) {
                     continue; // only items reaching up from below can support it
                 }
-                $ix = min($item->x + $item->width, $other->x + $other->width) - max($item->x, $other->x);
-                $iy = min($item->y + $item->length, $other->y + $other->length) - max($item->y, $other->y);
-                if ($ix > 0 && $iy > 0) {
-                    $supported += $ix * $iy;
-                }
+                $supported += AngledGeometry::intersectionArea(AngledGeometry::footprint($item), AngledGeometry::footprint($other));
             }
             $minimum = min($minimum, $supported / (($item->width * $item->length) ?: 1));
         }
@@ -107,7 +102,7 @@ final class PackingValidator
         }
 
         return match ($item->getAllowedRotation()) {
-            Rotation::Never => $packed === $defined,
+            Rotation::Never => $packed === $defined && !$packedItem->isAngled(),
             Rotation::KeepFlat => $packedItem->depth === $item->getDepth(),
             Rotation::BestFit => true,
         };

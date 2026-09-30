@@ -13,6 +13,10 @@
 - `PackedBoxCostCalculator` and `Packer::setCostCalculator()` so the thorough strategy can minimise shipping cost
   rather than the number and size of boxes
 - `bin/benchmark`, a repeatable benchmark harness over the published test sets and the bookshop order corpus
+- Angled placement, enabled with `setAllowAngledPlacement(true)` on `Packer` or `VolumePacker`: an item too long to fit a
+  box any other way is turned about the vertical axis just enough to fit, so that a box a little too small for it can
+  still be used. Identical angled items nest side by side and other items fill the empty corners beside them.
+  `PackedItem` gains `angle`, `boundingWidth`, `boundingLength` and `isAngled()`
 
 ### Fixed
 - `VolumePacker::pack()` no longer fails when given an empty item list

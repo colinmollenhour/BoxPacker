@@ -44,6 +44,7 @@ class VolumePackerFactory
         ?float $timeBudget = null,
         private readonly LoggerInterface $logger = new NullLogger(),
         private readonly bool $beStrictAboutItemOrdering = false,
+        private readonly bool $allowAngledPlacement = false,
     ) {
         $this->deadline = $timeBudget === null ? null : hrtime(true) + (int) (max(0.0, $timeBudget) * 1e9);
     }
@@ -53,6 +54,10 @@ class VolumePackerFactory
         $volumePacker = new VolumePacker($box, $items);
         $volumePacker->setLogger($this->logger);
         $volumePacker->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
+        if ($this->allowAngledPlacement) {
+            $volumePacker->setAllowAngledPlacement(true);
+            $volumePacker->setMinimumSupport($this->minimumSupport);
+        }
 
         if ($this->strategy === PackingStrategy::Thorough) {
             $volumePacker->setStrategy($this->strategy);
@@ -79,6 +84,11 @@ class VolumePackerFactory
     public function setCallBudget(?int $placements): void
     {
         $this->callBudget = $placements;
+    }
+
+    public function allowsAngledPlacement(): bool
+    {
+        return $this->allowAngledPlacement;
     }
 
     public function getSearchBudget(): ?int

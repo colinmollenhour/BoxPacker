@@ -21,7 +21,7 @@ $usage = <<<'USAGE'
 
       --strategy=NAME     strategy to run (default: legacy); --list to see all
       --datasets=SPEC     comma list of datasets or groups (default: published)
-                          groups: ecommerce, container, extreme, bookshop, published, all; ranges like br1-7
+                          groups: ecommerce, container, extreme, bookshop, published, all (published + bookshop), angled; ranges like br1-7
       --limit=N           only the first N instances of each dataset (0 = all)
       --jobs=N            parallel worker processes (default: 4)
       --opt=KEY=VALUE     strategy option, repeatable (e.g. --opt=width=8 --opt=time=2)

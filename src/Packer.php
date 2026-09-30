@@ -66,6 +66,8 @@ class Packer implements LoggerAwareInterface
 
     protected float $minimumSupport = 0.5;
 
+    protected bool $allowAngledPlacement = false;
+
     protected ?PackedBoxCostCalculator $costCalculator = null;
 
     public function __construct(
@@ -184,6 +186,15 @@ class Packer implements LoggerAwareInterface
     public function setStrategy(PackingStrategy $strategy): void
     {
         $this->strategy = $strategy;
+    }
+
+    /**
+     * Allow items too long to fit a box any other way to be turned about the vertical axis just enough to fit, so that
+     * boxes a little too small for them can still be used, see {@see VolumePacker::setAllowAngledPlacement()}.
+     */
+    public function setAllowAngledPlacement(bool $allow): void
+    {
+        $this->allowAngledPlacement = $allow;
     }
 
     /**
@@ -491,7 +502,8 @@ class Packer implements LoggerAwareInterface
             $this->searchBudget,
             $this->strategy === PackingStrategy::Thorough ? $this->searchTimeLimit : null,
             $this->logger,
-            $this->beStrictAboutItemOrdering
+            $this->beStrictAboutItemOrdering,
+            $this->allowAngledPlacement
         );
     }
 
