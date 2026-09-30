@@ -135,6 +135,7 @@ final class Strategies
             $packer->setSearchTimeLimit((float) $options['time']);
         }
         $packer->setMaxBoxesToBalanceWeight((int) ($options['balance'] ?? 0));
+
         $packer->throwOnUnpackableItem(false);
         foreach ($boxes as $box) {
             $packer->addBox($box);

@@ -21,6 +21,7 @@ use function array_values;
 use function ceil;
 use function count;
 use function implode;
+use function intdiv;
 use function ksort;
 use function iterator_to_array;
 use function max;
@@ -61,6 +62,12 @@ class ThoroughPacker implements LoggerAwareInterface
      * ...and at least this many.
      */
     private const MIN_IMPROVEMENT_PACKINGS = 50;
+
+    /**
+     * Each attempted improvement searches with this fraction of the single-box search budget: measured on the bookshop
+     * corpus, a tenth finds the same improvements in a fraction of the time.
+     */
+    private const IMPROVEMENT_BUDGET_DIVISOR = 10;
 
     private LoggerInterface $logger;
 
@@ -483,6 +490,8 @@ class ThoroughPacker implements LoggerAwareInterface
             : max(self::MIN_IMPROVEMENT_PACKINGS, self::IMPROVEMENT_PACKINGS_PER_BOX * count($solution));
         $remaining = $this->volumePackerFactory->getRemainingTime();
         $this->volumePackerFactory->setCallTimeLimit($remaining === null ? null : $remaining / 10);
+        $searchBudget = $this->volumePackerFactory->getSearchBudget();
+        $this->volumePackerFactory->setCallBudget($searchBudget === null ? null : intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR));
 
         $lowerBound = $this->lowerBound($solution);
         do {
@@ -492,6 +501,7 @@ class ThoroughPacker implements LoggerAwareInterface
         } while ($improved && $this->canContinue());
 
         $this->improving = false;
+        $this->volumePackerFactory->setCallBudget(null);
     }
 
     /**

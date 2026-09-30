@@ -45,16 +45,17 @@ Support
 -------
 
 Every item packed by the thorough strategy rests on the floor of the box or on the tops of other items. By default
-at least 75% of each item's base must be supported; you can require more (``1.0`` = no overhang at all) or less:
+at least half of each item's base must be supported; you can require more (``1.0`` = no overhang at all, e.g. for
+pallets) or less (``0.0`` places no requirement at all, like the fast packer):
 
 .. code-block:: php
 
     <?php
         $volumePacker->setMinimumSupport(1.0);
 
-Requiring full support costs little on loads with few distinct item types, but on very mixed loads it can cost
-several percentage points of utilisation, as it is much harder to build flat surfaces from items of many
-different heights.
+Stricter support costs density. On the bookshop order corpus, requiring 75% support instead of 50% costs about 0.5%
+more cartons; on very mixed container loads, requiring full support costs several percentage points of utilisation,
+as it is much harder to build flat surfaces from items of many different heights.
 
 Effort and run time
 -------------------

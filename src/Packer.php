@@ -57,7 +57,7 @@ class Packer implements LoggerAwareInterface
 
     protected ?float $searchTimeLimit = null;
 
-    protected float $minimumSupport = 0.75;
+    protected float $minimumSupport = 0.5;
 
     protected ?PackedBoxCostCalculator $costCalculator = null;
 

@@ -46,7 +46,7 @@ class PublishedThoroughTest extends TestCase
         self::appendLastrun(self::$utilisationLastrunPath, sprintf("%s,%.1f\n", $problem, $volumeUtilisation));
 
         self::assertSame([], PackingValidator::problems($packedBox));
-        self::assertGreaterThanOrEqual(0.75, PackingValidator::minimumSupport($packedBox));
+        self::assertGreaterThanOrEqual(0.5, PackingValidator::minimumSupport($packedBox));
         self::assertEquals(self::$expectedResults[$problem], $volumeUtilisation);
     }
 

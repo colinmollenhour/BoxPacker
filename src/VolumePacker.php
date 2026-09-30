@@ -55,7 +55,7 @@ class VolumePacker implements LoggerAwareInterface
 
     protected ?float $searchTimeLimit = null;
 
-    protected float $minimumSupport = 0.75;
+    protected float $minimumSupport = 0.5;
 
     public function __construct(protected Box $box, ItemList $items)
     {
@@ -128,7 +128,7 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: the minimum fraction (0-1) of each item's base that must rest on the box floor or on
-     * other items. Defaults to 0.75.
+     * other items. Defaults to 0.5.
      */
     public function setMinimumSupport(float $fraction): void
     {

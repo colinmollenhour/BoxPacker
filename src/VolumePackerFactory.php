@@ -31,13 +31,15 @@ class VolumePackerFactory
 
     private ?float $callTimeLimit = null;
 
+    private ?int $callBudget = null;
+
     /**
      * @param ?float $timeBudget total wall-clock seconds for the run (Thorough strategy only), starting now
      */
     public function __construct(
         private readonly PackingStrategy $strategy = PackingStrategy::Fast,
         private readonly int $maxBeamWidth = 16,
-        private readonly float $minimumSupport = 0.75,
+        private readonly float $minimumSupport = 0.5,
         private readonly ?int $searchBudget = 10000,
         ?float $timeBudget = null,
         private readonly LoggerInterface $logger = new NullLogger(),
@@ -56,7 +58,7 @@ class VolumePackerFactory
             $volumePacker->setStrategy($this->strategy);
             $volumePacker->setMaxBeamWidth($this->maxBeamWidth);
             $volumePacker->setMinimumSupport($this->minimumSupport);
-            $volumePacker->setSearchBudget($this->searchBudget);
+            $volumePacker->setSearchBudget($this->callBudget === null || $this->searchBudget === null ? $this->searchBudget ?? $this->callBudget : min($this->searchBudget, $this->callBudget));
             $volumePacker->setSearchTimeLimit($this->getSearchTimeLimit());
         }
 
@@ -69,6 +71,19 @@ class VolumePackerFactory
     public function setCallTimeLimit(?float $seconds): void
     {
         $this->callTimeLimit = $seconds;
+    }
+
+    /**
+     * Cap the search budget (trial placements) of each VolumePacker created from now on, below the configured one.
+     */
+    public function setCallBudget(?int $placements): void
+    {
+        $this->callBudget = $placements;
+    }
+
+    public function getSearchBudget(): ?int
+    {
+        return $this->searchBudget;
     }
 
     public function hasTimeBudget(): bool
