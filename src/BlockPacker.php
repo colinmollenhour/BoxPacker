@@ -79,6 +79,12 @@ class BlockPacker implements LoggerAwareInterface
 
     private const FILLABLE_CACHE_SIZE = 64;
 
+    /**
+     * Placement callbacks (ConstrainedPlacementItem) are charged to the search budget at this rate: often cheap
+     * (the BR benchmark's edge restrictions), but potentially not, and there can be very many of them.
+     */
+    private const CALLBACKS_PER_PLACEMENT = 10;
+
     private LoggerInterface $logger;
 
     private readonly int $boxWidth;
@@ -152,6 +158,8 @@ class BlockPacker implements LoggerAwareInterface
     private int $placementBudget = PHP_INT_MAX;
 
     private int $placements = 0;
+
+    private int $callbacks = 0;
 
     private bool $budgetExhausted = false;
 
@@ -370,6 +378,7 @@ class BlockPacker implements LoggerAwareInterface
         $this->outOfTime = false;
         $this->greedyRuns = 0;
         $this->placements = 0;
+        $this->callbacks = 0;
         $this->completions = [];
 
         $root = new BlockSearchState();
@@ -998,7 +1007,9 @@ class BlockPacker implements LoggerAwareInterface
             $next[$type] ??= $this->initialCounts[$type] - $state->counts[$type];
             $item = $this->itemsByType[$type][$next[$type]++];
             if ($item instanceof ConstrainedPlacementItem) {
-                ++$this->placements; // callbacks can be costly, so count them against the search budget too
+                if (++$this->callbacks % self::CALLBACKS_PER_PLACEMENT === 0) {
+                    ++$this->placements; // callbacks can be costly, so they count against the search budget too
+                }
                 if (!$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
                     return false;
                 }

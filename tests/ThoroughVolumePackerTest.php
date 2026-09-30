@@ -208,7 +208,7 @@ class ThoroughVolumePackerTest extends TestCase
         $packer->setSearchBudget(2000);
         $packedBox = $packer->pack();
 
-        self::assertLessThan(5000, $counting::$calls);
+        self::assertLessThan(30000, $counting::$calls); // unbounded, this is over 400,000
         self::assertCount(8, $packedBox->items);
     }
 
