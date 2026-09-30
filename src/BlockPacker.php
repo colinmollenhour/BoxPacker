@@ -154,6 +154,13 @@ class BlockPacker implements LoggerAwareInterface
 
     private bool $phaseExhausted = false;
 
+    /**
+     * Greedy completions already computed during this search, by signature of the state they started from.
+     *
+     * @var array<string, BlockSearchState>
+     */
+    private array $completions = [];
+
     private int $spaceRule = 1;
 
     /**
@@ -345,6 +352,7 @@ class BlockPacker implements LoggerAwareInterface
         $this->outOfTime = false;
         $this->greedyRuns = 0;
         $this->placements = 0;
+        $this->completions = [];
 
         $root = new BlockSearchState();
         $root->spaces = [[0, 0, 0, $this->boxWidth, $this->boxLength, $this->boxDepth]];
@@ -363,6 +371,7 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         $this->logger->debug('Block search complete', ['greedyRuns' => $this->greedyRuns, 'volume' => $best->volume, 'outOfTime' => $this->outOfTime]);
+        $this->completions = [];
 
         return $this->materialise($best);
     }
@@ -397,8 +406,11 @@ class BlockPacker implements LoggerAwareInterface
 
                     if ($candidate === $greedyChoice) {
                         $childCompleted = $completed;
+                    } elseif (isset($this->completions[$signature])) {
+                        $childCompleted = $this->completions[$signature]; // already evaluated in a narrower pass
                     } else {
                         $childCompleted = $this->greedy(clone $child);
+                        $this->completions[$signature] = $childCompleted;
                         if ($childCompleted->volume > $best->volume) {
                             $best = $childCompleted;
                             if ($this->isComplete($best)) {
@@ -512,7 +524,33 @@ class BlockPacker implements LoggerAwareInterface
         $bestVolume = 0;
         $boxWidth = $this->boxWidth;
         $boxLength = $this->boxLength;
-        $rule = $this->spaceRule;
+        if ($this->spaceRule === 1) {
+            // bottom-up: lowest first, then nearest a corner
+            foreach ($state->spaces as $index => $space) {
+                $z = $space[2];
+                if ($z > $bestA || isset($space[6])) {
+                    continue; // higher than the best so far, or dormant until new support appears
+                }
+                $dx = min($space[0], $boxWidth - $space[3]);
+                $dy = min($space[1], $boxLength - $space[4]);
+                if ($dx > $dy) {
+                    $swap = $dx;
+                    $dx = $dy;
+                    $dy = $swap;
+                }
+                if ($z < $bestA || $dx < $bestB || ($dx === $bestB && ($dy < $bestC || ($dy === $bestC && ($space[3] - $space[0]) * ($space[4] - $space[1]) * ($space[5] - $space[2]) > $bestVolume)))) {
+                    $bestIndex = $index;
+                    $bestA = $z;
+                    $bestB = $dx;
+                    $bestC = $dy;
+                    $bestVolume = ($space[3] - $space[0]) * ($space[4] - $space[1]) * ($space[5] - $space[2]);
+                }
+            }
+
+            return $bestIndex;
+        }
+
+        // nearest a corner of the container, by the distances to it sorted ascending
         foreach ($state->spaces as $index => $space) {
             if (isset($space[6])) {
                 continue; // dormant until new support appears
@@ -521,14 +559,18 @@ class BlockPacker implements LoggerAwareInterface
             $dy = min($space[1], $boxLength - $space[4]);
             $dz = $space[2];
             if ($dx > $dy) {
-                [$dx, $dy] = [$dy, $dx];
+                $swap = $dx;
+                $dx = $dy;
+                $dy = $swap;
             }
-            if ($rule === 1) { // bottom-up: height first, then corner distance
-                [$dx, $dy, $dz] = [$dz, $dx, $dy];
-            } elseif ($dy > $dz) { // sort the three distances ascending
-                [$dy, $dz] = [$dz, $dy];
+            if ($dy > $dz) {
+                $swap = $dy;
+                $dy = $dz;
+                $dz = $swap;
                 if ($dx > $dy) {
-                    [$dx, $dy] = [$dy, $dx];
+                    $swap = $dx;
+                    $dx = $dy;
+                    $dy = $swap;
                 }
             }
             if ($dx < $bestA || ($dx === $bestA && ($dy < $bestB || ($dy === $bestB && ($dz < $bestC || ($dz === $bestC && ($space[3] - $space[0]) * ($space[4] - $space[1]) * ($space[5] - $space[2]) > $bestVolume)))))) {
