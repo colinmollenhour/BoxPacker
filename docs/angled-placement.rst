@@ -30,6 +30,9 @@ Angled placement is off by default. Turn it on with ``setAllowAngledPlacement(tr
 
         $packedBoxes = $packer->pack(); // everything goes in the small box, the umbrellas at an angle
 
+.. image:: images/angled-order.png
+    :alt: An order that needs a 1200 × 1200 × 600 box when packed square fits a 1000 × 1000 × 300 box with the umbrellas angled
+
 Which items are angled
 ----------------------
 
@@ -47,6 +50,9 @@ each other.
 Turning an item leaves empty triangles in the corners of the space it takes up. These are offered to other items:
 smaller items are packed into them (square to the box) and items can rest on top of angled items where they are
 supported well enough (see ``setMinimumSupport()``).
+
+.. image:: images/angled-nest.png
+    :alt: Top view: three parallel rods at 30.3° with cubes in the empty corner triangles
 
 Results
 -------
