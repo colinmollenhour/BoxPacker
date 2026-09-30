@@ -26,10 +26,10 @@ use const PHP_INT_MAX;
 class VolumePacker implements LoggerAwareInterface
 {
     /**
-     * Above this many items the Thorough strategy no longer also runs the fast packer for comparison: on large
+     * Above this many items the Thorough strategy no longer also runs the fast packer for comparison: on larger
      * loads the block search is consistently denser and the fast packer's run time grows quickly.
      */
-    private const FAST_COMPARISON_LIMIT = 100;
+    private const FAST_COMPARISON_LIMIT = 40;
 
     protected LoggerInterface $logger;
 
@@ -56,6 +56,8 @@ class VolumePacker implements LoggerAwareInterface
     protected ?float $searchTimeLimit = null;
 
     protected float $minimumSupport = 0.5;
+
+    private int $searchPlacements = 0;
 
     public function __construct(protected Box $box, ItemList $items)
     {
@@ -203,8 +205,20 @@ class VolumePacker implements LoggerAwareInterface
         $blockPacker->setTimeLimit($this->searchTimeLimit);
         $blockPacker->setPlacementBudget($this->searchBudget);
         $blockPacker->setMinimumSupport($this->minimumSupport);
+        $packedBox = $blockPacker->pack();
+        $this->searchPlacements += $blockPacker->getPlacements();
 
-        return $blockPacker->pack();
+        return $packedBox;
+    }
+
+    /**
+     * Number of trial block placements made by the thorough search in this packer so far.
+     *
+     * @internal
+     */
+    public function getSearchPlacements(): int
+    {
+        return $this->searchPlacements;
     }
 
     /**

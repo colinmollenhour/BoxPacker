@@ -69,6 +69,11 @@ class ThoroughPacker implements LoggerAwareInterface
      */
     private const IMPROVEMENT_BUDGET_DIVISOR = 10;
 
+    /**
+     * The whole improvement phase may use (in total) this many times the single-box search budget.
+     */
+    private const IMPROVEMENT_BUDGET_FACTOR = 2;
+
     private LoggerInterface $logger;
 
     /**
@@ -126,6 +131,13 @@ class ThoroughPacker implements LoggerAwareInterface
     private int $improvementPackings = 0;
 
     private int $maxImprovementPackings = PHP_INT_MAX;
+
+    /**
+     * Trial block placements made by the single-box searches since the improvement phase began.
+     */
+    private int $improvementPlacements = 0;
+
+    private int $maxImprovementPlacements = PHP_INT_MAX;
 
     /**
      * Construction criterion when no single box will do: fill the box packing the most volume per unit of cost
@@ -291,7 +303,7 @@ class ThoroughPacker implements LoggerAwareInterface
         $packedBoxes = [];
 
         while ($items->count() > 0) {
-            $this->budgetConstructionTime($items);
+            $this->budgetConstruction($items);
 
             /** @var list<Item> $itemArray */
             $itemArray = iterator_to_array($items, false);
@@ -491,6 +503,8 @@ class ThoroughPacker implements LoggerAwareInterface
         $remaining = $this->volumePackerFactory->getRemainingTime();
         $this->volumePackerFactory->setCallTimeLimit($remaining === null ? null : $remaining / 10);
         $searchBudget = $this->volumePackerFactory->getSearchBudget();
+        $this->improvementPlacements = 0;
+        $this->maxImprovementPlacements = $searchBudget === null ? PHP_INT_MAX : self::IMPROVEMENT_BUDGET_FACTOR * $searchBudget;
         $this->volumePackerFactory->setCallBudget($searchBudget === null ? null : intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR));
 
         $lowerBound = $this->lowerBound($solution);
@@ -836,7 +850,11 @@ class ThoroughPacker implements LoggerAwareInterface
         }
 
         $itemList = ItemList::fromArray($items);
-        $packedBox = $this->volumePackerFactory->create($box, $itemList)->pack();
+        $volumePacker = $this->volumePackerFactory->create($box, $itemList);
+        $packedBox = $volumePacker->pack();
+        if ($this->improving) {
+            $this->improvementPlacements += $volumePacker->getSearchPlacements();
+        }
         if ($itemList->hasLinkedItems()) {
             $linkedItemGroupEnforcer = new LinkedItemGroupEnforcer();
             $linkedItemGroupEnforcer->setLogger($this->logger);
@@ -1003,21 +1021,31 @@ class ThoroughPacker implements LoggerAwareInterface
 
     private function canContinue(): bool
     {
-        return $this->improvementPackings < $this->maxImprovementPackings && !$this->volumePackerFactory->isOutOfTime();
+        return $this->improvementPackings < $this->maxImprovementPackings
+            && $this->improvementPlacements < $this->maxImprovementPlacements
+            && !$this->volumePackerFactory->isOutOfTime();
     }
 
     /**
-     * With a time budget: share the time left for construction between the searches it is still likely to need,
-     * keeping half of what remains back for the improvement phase.
+     * Share out the search effort for the next box of the construction: while several more boxes are needed, each gets
+     * a proportional share of the search budget, and with a time budget, a share of the time left (keeping half back
+     * for the improvement phase).
      */
-    private function budgetConstructionTime(ItemList $items): void
+    private function budgetConstruction(ItemList $items): void
     {
+        $boxesStillNeeded = $this->maxVolume > 0 ? max(1, (int) ceil($items->getVolume() / $this->maxVolume)) : 1;
+
+        $searchBudget = $this->volumePackerFactory->getSearchBudget();
+        if ($searchBudget !== null) {
+            // while several more boxes are needed, each one's packing matters less: share the budget out
+            $this->volumePackerFactory->setCallBudget(max(intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR), intdiv($searchBudget, $boxesStillNeeded)));
+        }
+
         $remaining = $this->volumePackerFactory->getRemainingTime();
         if ($remaining === null) {
             return;
         }
 
-        $boxesStillNeeded = $this->maxVolume > 0 ? (int) ceil($items->getVolume() / $this->maxVolume) : 1;
         $searchesStillNeeded = max(1, count($this->boxTypes) * $boxesStillNeeded);
         $this->volumePackerFactory->setCallTimeLimit($remaining / 2 / $searchesStillNeeded);
     }
