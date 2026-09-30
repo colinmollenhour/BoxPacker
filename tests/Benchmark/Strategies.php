@@ -15,6 +15,7 @@ use DVDoug\BoxPacker\ItemList;
 use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedBoxList;
 use DVDoug\BoxPacker\Packer;
+use DVDoug\BoxPacker\PackingStrategy;
 use DVDoug\BoxPacker\VolumePacker;
 use InvalidArgumentException;
 
@@ -33,6 +34,7 @@ final class Strategies
             'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing)',
             'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
             'block' => 'Block-building beam search (options: width, support, time)',
+            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack() (options: width, support, time, balance)',
         ];
     }
 
@@ -45,6 +47,7 @@ final class Strategies
             'legacy' => (new VolumePacker($box, $items))->pack(),
             'legacy-subset' => (new VolumePacker($box, $items))->packBestSubset(),
             'block' => self::blockPacker($box, $items, $options)->pack(),
+            'thorough' => self::thoroughSingle($box, $items, $options)->pack(),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
     }
@@ -57,6 +60,7 @@ final class Strategies
     {
         return match ($strategy) {
             'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items),
+            'thorough' => self::thoroughMulti($boxes, $items, $options),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
     }
@@ -77,6 +81,43 @@ final class Strategies
         }
 
         return $packer;
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    private static function thoroughSingle(Box $box, ItemList $items, array $options): VolumePacker
+    {
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setMaxBeamWidth((int) ($options['width'] ?? 8));
+        $packer->setMinimumSupport((float) ($options['support'] ?? 1.0));
+        $packer->setSearchTimeLimit(isset($options['time']) ? (float) $options['time'] : null);
+
+        return $packer;
+    }
+
+    /**
+     * Weight balancing is off unless asked for (balance=N boxes), as for the legacy strategy.
+     *
+     * @param list<Box>             $boxes
+     * @param array<string, string> $options
+     */
+    private static function thoroughMulti(array $boxes, ItemList $items, array $options): PackedBoxList
+    {
+        $packer = new Packer();
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setMaxBeamWidth((int) ($options['width'] ?? 8));
+        $packer->setMinimumSupport((float) ($options['support'] ?? 1.0));
+        $packer->setSearchTimeLimit(isset($options['time']) ? (float) $options['time'] : null);
+        $packer->setMaxBoxesToBalanceWeight((int) ($options['balance'] ?? 0));
+        $packer->throwOnUnpackableItem(false);
+        foreach ($boxes as $box) {
+            $packer->addBox($box);
+        }
+        $packer->setItems($items);
+
+        return $packer->pack();
     }
 
     /**
