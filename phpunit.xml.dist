@@ -24,6 +24,7 @@
     <exclude>
       <group>efficiency-container</group>
       <group>efficiency-extreme</group>
+      <group>efficiency-thorough</group>
     </exclude>
   </groups>
 

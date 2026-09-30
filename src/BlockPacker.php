@@ -150,9 +150,7 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $placements = 0;
 
-    private int $phaseLimit = PHP_INT_MAX;
-
-    private bool $phaseExhausted = false;
+    private bool $budgetExhausted = false;
 
     /**
      * Greedy completions already computed during this search, by signature of the state they started from.
@@ -364,13 +362,12 @@ class BlockPacker implements LoggerAwareInterface
         $rootCompleted = $this->greedy(clone $root);
         $best = $rootCompleted;
 
-        $this->phaseLimit = $this->placementBudget;
-        $this->phaseExhausted = false;
-        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->phaseExhausted && !$this->outOfTime; $width *= 2) {
+        $this->budgetExhausted = false;
+        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->budgetExhausted && !$this->outOfTime; $width *= 2) {
             $best = $this->beamSearch($root, $rootCompleted, $width, $best);
         }
 
-        $this->logger->debug('Block search complete', ['greedyRuns' => $this->greedyRuns, 'volume' => $best->volume, 'outOfTime' => $this->outOfTime]);
+        $this->logger->debug('Block search complete', ['greedyRuns' => $this->greedyRuns, 'placements' => $this->placements, 'volume' => $best->volume, 'budgetExhausted' => $this->budgetExhausted, 'outOfTime' => $this->outOfTime]);
         $this->completions = [];
 
         return $this->materialise($best);
@@ -417,8 +414,8 @@ class BlockPacker implements LoggerAwareInterface
                                 return $best;
                             }
                         }
-                        if ($this->placements > $this->phaseLimit) {
-                            $this->phaseExhausted = true;
+                        if ($this->placements > $this->placementBudget) {
+                            $this->budgetExhausted = true;
 
                             return $best;
                         }
@@ -495,6 +492,10 @@ class BlockPacker implements LoggerAwareInterface
             }
             $this->place($state, $candidates[0]);
         }
+
+        // a completed packing is only ever read for its placements and volume, so free the rest
+        $state->spaces = $state->tops = [];
+        $state->context = null;
 
         return $state;
     }

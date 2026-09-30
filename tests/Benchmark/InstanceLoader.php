@@ -46,6 +46,27 @@ final class InstanceLoader
     ];
 
     /**
+     * Number of item types per instance in each BR class, as used in the PHPUnit test names.
+     */
+    private const BR_TYPES = [1 => 3, 2 => 5, 3 => 8, 4 => 10, 5 => 12, 6 => 15, 7 => 20, 8 => 30, 9 => 40, 10 => 50, 11 => 60, 12 => 70, 13 => 80, 14 => 90, 15 => 100];
+
+    /**
+     * The name the PHPUnit suites use for an instance (and so the key in their expected-results CSVs).
+     */
+    public static function testName(string $dataset, string $id): string
+    {
+        if (preg_match('/^br(\d+)$/', $dataset, $m)) {
+            return 'Bischoff #' . self::BR_TYPES[(int) $m[1]] . '-' . $id;
+        }
+
+        return match ($dataset) {
+            'loh-nee' => "Loh and Nee #{$id}",
+            'ivancic' => "Ivancic #{$id}",
+            default => $id,
+        };
+    }
+
+    /**
      * @return list<string>
      */
     public static function expandDatasetNames(string $spec): array

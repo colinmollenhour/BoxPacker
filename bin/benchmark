@@ -28,11 +28,12 @@ $usage = <<<'USAGE'
       --save=PATH         write full results (summary + per-instance rows) as JSON
       --compare=PATH      compare against a previously saved result
       --rows              print one line per instance
+      --csv=PATH          write "test name,utilisation" lines (the format of tests/data/*-expected*.csv)
       --list              list strategies
 
     USAGE;
 
-$opts = getopt('', ['strategy:', 'datasets:', 'limit:', 'jobs:', 'opt:', 'save:', 'compare:', 'rows', 'list', 'worker', 'shard:', 'help']);
+$opts = getopt('', ['strategy:', 'datasets:', 'limit:', 'jobs:', 'opt:', 'save:', 'compare:', 'rows', 'csv:', 'list', 'worker', 'shard:', 'help']);
 
 if (isset($opts['help'])) {
     echo $usage;
@@ -96,6 +97,15 @@ $optionText = $strategyOptions ? ' ' . json_encode($strategyOptions) : '';
 echo BenchmarkRunner::formatSummary($summary, $baseline['summary'] ?? null, "strategy {$strategy}{$optionText}, wall {$wall}s, jobs {$jobs}");
 if ($baseline) {
     echo BenchmarkRunner::formatWinLoss($rows, $baseline['rows']);
+}
+
+if (isset($opts['csv'])) {
+    $csv = '';
+    foreach ($rows as $row) {
+        $csv .= InstanceLoader::testName($row['dataset'], $row['id']) . ',' . ($row['kind'] === 'single' ? sprintf('%.1f', $row['util']) : $row['boxes']) . "\n";
+    }
+    file_put_contents($opts['csv'], $csv);
+    echo "wrote {$opts['csv']}\n";
 }
 
 if (isset($opts['save'])) {
