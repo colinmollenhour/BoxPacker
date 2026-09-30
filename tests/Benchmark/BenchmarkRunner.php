@@ -36,6 +36,7 @@ use function array_sum;
 use function dirname;
 use function floor;
 use function strnatcmp;
+use function min;
 
 use const JSON_PRETTY_PRINT;
 use const JSON_THROW_ON_ERROR;
@@ -101,6 +102,8 @@ final class BenchmarkRunner
                 'packed' => $packedBox->items->count(),
                 'items' => $itemCount,
                 'time' => $time,
+                'invalid' => count(PackingValidator::problems($packedBox)),
+                'support' => PackingValidator::minimumSupport($packedBox),
             ];
         }
 
@@ -108,9 +111,13 @@ final class BenchmarkRunner
         $time = (hrtime(true) - $start) / 1e9;
         $packed = 0;
         $boxVolume = 0;
+        $invalid = 0;
+        $support = 1.0;
         foreach ($packedBoxes as $packedBox) {
             $packed += $packedBox->items->count();
             $boxVolume += $packedBox->getInnerVolume();
+            $invalid += count(PackingValidator::problems($packedBox));
+            $support = min($support, PackingValidator::minimumSupport($packedBox));
         }
 
         return [
@@ -124,6 +131,8 @@ final class BenchmarkRunner
             'packed' => $packed,
             'items' => $itemCount,
             'time' => $time,
+            'invalid' => $invalid,
+            'support' => $support,
         ];
     }
 
@@ -201,6 +210,8 @@ final class BenchmarkRunner
                 'unpacked' => array_sum(array_column($datasetRows, 'items')) - array_sum(array_column($datasetRows, 'packed')),
             ];
             $entry['util'] = array_sum(array_column($datasetRows, 'util')) / $n;
+            $entry['invalid'] = array_sum(array_column($datasetRows, 'invalid'));
+            $entry['support'] = min(array_column($datasetRows, 'support') ?: [1.0]);
             if ($entry['kind'] === 'multi') {
                 $entry['boxes'] = array_sum(array_column($datasetRows, 'boxes'));
                 $entry['lb'] = array_sum(array_column($datasetRows, 'lb'));
@@ -222,7 +233,7 @@ final class BenchmarkRunner
         if ($title !== '') {
             $lines[] = $title;
         }
-        $lines[] = sprintf('%-12s %5s  %-28s %-16s %8s %8s %8s', 'dataset', 'n', 'result', 'vs baseline', 't mean', 't p95', 't max');
+        $lines[] = sprintf('%-12s %5s  %-28s %-16s %8s %8s %8s %8s', 'dataset', 'n', 'result', 'vs baseline', 't mean', 't p95', 't max', 'support');
         $totals = ['n' => 0, 'time' => 0.0];
         foreach ($summary as $dataset => $s) {
             $b = $baseline[$dataset] ?? null;
@@ -240,10 +251,13 @@ final class BenchmarkRunner
             if ($s['kind'] === 'multi' && $s['unpacked'] > 0) {
                 $result .= " UNPACKED {$s['unpacked']}";
             }
+            if (($s['invalid'] ?? 0) > 0) {
+                $result .= " INVALID {$s['invalid']}";
+            }
             if ($b) {
                 $delta .= sprintf(' t×%.2f', $s['timeMean'] / max(1e-9, $b['timeMean']));
             }
-            $lines[] = sprintf('%-12s %5d  %-28s %-16s %7.3fs %7.3fs %7.3fs', $dataset, $s['n'], $result, $delta, $s['timeMean'], $s['timeP95'], $s['timeMax']);
+            $lines[] = sprintf('%-12s %5d  %-28s %-16s %7.3fs %7.3fs %7.3fs %7.0f%%', $dataset, $s['n'], $result, $delta, $s['timeMean'], $s['timeP95'], $s['timeMax'], 100 * ($s['support'] ?? 1));
             $totals['n'] += $s['n'];
             $totals['time'] += $s['timeMean'] * $s['n'];
         }

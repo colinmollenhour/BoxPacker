@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace DVDoug\BoxPacker\Benchmark;
 
+use DVDoug\BoxPacker\BlockPacker;
 use DVDoug\BoxPacker\Box;
 use DVDoug\BoxPacker\ItemList;
 use DVDoug\BoxPacker\PackedBox;
@@ -31,6 +32,7 @@ final class Strategies
         return [
             'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing)',
             'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
+            'block' => 'Block-building beam search (options: width, support, time)',
         ];
     }
 
@@ -42,6 +44,7 @@ final class Strategies
         return match ($strategy) {
             'legacy' => (new VolumePacker($box, $items))->pack(),
             'legacy-subset' => (new VolumePacker($box, $items))->packBestSubset(),
+            'block' => self::blockPacker($box, $items, $options)->pack(),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
     }
@@ -56,6 +59,24 @@ final class Strategies
             'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    private static function blockPacker(Box $box, ItemList $items, array $options): BlockPacker
+    {
+        $packer = new BlockPacker($box, $items);
+        $packer->setMaxBeamWidth((int) ($options['width'] ?? 8));
+        $packer->setMinimumSupport((float) ($options['support'] ?? 1.0));
+        if (isset($options['time'])) {
+            $packer->setTimeLimit((float) $options['time']);
+        }
+        if (isset($options['rule'])) {
+            $packer->setSpaceRule((int) $options['rule']);
+        }
+
+        return $packer;
     }
 
     /**
