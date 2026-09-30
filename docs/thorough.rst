@@ -15,9 +15,17 @@ BoxPacker has two packing strategies:
 .. code-block:: php
 
     <?php
+        use DVDoug\BoxPacker\Packer;
         use DVDoug\BoxPacker\PackingStrategy;
         use DVDoug\BoxPacker\VolumePacker;
 
+        // choosing boxes for an order
+        $packer = new Packer();
+        $packer->setStrategy(PackingStrategy::Thorough);
+        // ... addBox() / addItem() as usual
+        $packedBoxes = $packer->pack();
+
+        // or filling one box/container
         $volumePacker = new VolumePacker($box, $items);
         $volumePacker->setStrategy(PackingStrategy::Thorough);
         $packedBox = $volumePacker->pack(); // or ->packBestSubset()
@@ -40,6 +48,53 @@ is consistently the denser of the two, so only it is run.
 
 Everything the fast packer honours is honoured: allowed rotations (``Rotation::Never``, ``KeepFlat``, ``BestFit``),
 the preference for stable orientations, box weight limits, and ``ConstrainedPlacementItem`` callbacks.
+
+Choosing the boxes
+------------------
+
+With ``Packer``, the thorough strategy first builds a solution one box at a time: if a single box can hold
+everything that is left, the cheapest such box is used, otherwise the box that packs the most volume is filled. It
+then searches for a better set of boxes, accepting only changes that are strictly better:
+
+* merging two boxes into one
+* emptying a box into the others, one item (or linked group) at a time
+* moving each box's contents into a cheaper box type
+* repacking two boxes into two cheaper ones
+
+Moves that can only save a box stop once the number of boxes reaches a lower bound (by volume, weight, and items too
+large to share a box). Box quantity limits, linked items and placement callbacks are respected throughout. Weight
+redistribution (see :doc:`weight-distribution`) still runs afterwards, but its result is only kept if it does not
+make the boxes more numerous or more expensive.
+
+By default the thorough strategy minimises the number of boxes, and then their total inner volume.
+
+Minimising cost
+^^^^^^^^^^^^^^^
+
+If what you really pay for is postage, or boxes have different prices, give the packer a ``PackedBoxCostCalculator``.
+The thorough strategy then minimises the total cost of the boxes, and then their number - for example using two small
+cheap boxes rather than one large expensive one when that is cheaper.
+
+.. code-block:: php
+
+    <?php
+        use DVDoug\BoxPacker\PackedBox;
+        use DVDoug\BoxPacker\PackedBoxCostCalculator;
+
+        class ShippingCost implements PackedBoxCostCalculator
+        {
+            public function getCost(PackedBox $packedBox): float
+            {
+                $boxPrice = $packedBox->box->getPrice(); // your own Box implementation
+                $postage = 3.50 + 0.002 * $packedBox->getWeight(); // e.g. per parcel plus per gram
+
+                return $boxPrice + $postage;
+            }
+        }
+
+        $packer->setCostCalculator(new ShippingCost());
+
+The cost of a box should never go down when items are added to it (the cost of an empty box is used as a lower bound).
 
 Support
 -------
@@ -74,7 +129,11 @@ Three settings control how hard the thorough strategy works:
     An optional wall-clock limit. When reached, the best packing found so far is used. Note that results then depend
     on machine speed and load.
 
-As a guide, with the defaults on PHP 8.4 a typical e-commerce order is packed in milliseconds; container loads of
+The same settings are available on ``Packer``, where the budget applies to each box packing. There, a time limit is a
+limit for the whole of ``pack()``, shared between filling the boxes and searching for better ones; the boxes are always
+completed.
+
+As a guide, with the defaults on PHP 8.4 a typical e-commerce order is packed in 10-20 milliseconds; container loads of
 100-150 items of 3-20 types take around 0.2-1.5 seconds, and of 30-100 types 1-4 seconds.
 
 Things the thorough strategy does not do
