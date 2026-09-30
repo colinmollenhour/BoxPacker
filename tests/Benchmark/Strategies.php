@@ -15,6 +15,7 @@ use DVDoug\BoxPacker\ItemList;
 use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedBoxList;
 use DVDoug\BoxPacker\Packer;
+use DVDoug\BoxPacker\PackingStrategy;
 use DVDoug\BoxPacker\VolumePacker;
 use InvalidArgumentException;
 
@@ -32,7 +33,8 @@ final class Strategies
         return [
             'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing)',
             'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
-            'block' => 'Block-building beam search (options: width, support, time)',
+            'block' => 'Block-building beam search engine only (options: width, budget, support, time, rule, scoring)',
+            'vp-thorough' => 'VolumePacker with PackingStrategy::Thorough (options: width, budget, support, time)',
         ];
     }
 
@@ -45,6 +47,7 @@ final class Strategies
             'legacy' => (new VolumePacker($box, $items))->pack(),
             'legacy-subset' => (new VolumePacker($box, $items))->packBestSubset(),
             'block' => self::blockPacker($box, $items, $options)->pack(),
+            'vp-thorough' => self::thoroughVolumePacker($box, $items, $options)->pack(),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
     }
@@ -59,6 +62,29 @@ final class Strategies
             'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    private static function thoroughVolumePacker(Box $box, ItemList $items, array $options): VolumePacker
+    {
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        if (isset($options['width'])) {
+            $packer->setMaxBeamWidth((int) $options['width']);
+        }
+        if (isset($options['budget'])) {
+            $packer->setSearchBudget((int) $options['budget'] ?: null);
+        }
+        if (isset($options['support'])) {
+            $packer->setMinimumSupport((float) $options['support']);
+        }
+        if (isset($options['time'])) {
+            $packer->setSearchTimeLimit((float) $options['time']);
+        }
+
+        return $packer;
     }
 
     /**

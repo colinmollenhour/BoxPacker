@@ -3,6 +3,15 @@
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added
 - `VolumePacker::packBestSubset()` for the single-container “fill this box as densely as possible” problem (leftover items are expected)
+- New `PackingStrategy::Thorough`, selected with `setStrategy()`: a block-building beam search over maximal free spaces
+  that typically packs 10-15 percentage points more volume than the original algorithm on the published container
+  loading benchmarks. `PackingStrategy::Fast` (the original algorithm) remains the default
+- `setMaxBeamWidth()`, `setSearchBudget()`, `setSearchTimeLimit()` and `setMinimumSupport()` to control the thorough
+  strategy's effort and how well each item must be supported from below
+- `bin/benchmark`, a repeatable benchmark harness over the published test sets and the bookshop order corpus
+
+### Fixed
+- `VolumePacker::pack()` no longer fails when given an empty item list
 
 ## [4.3.0] - 2026-08-09
 ### Changed

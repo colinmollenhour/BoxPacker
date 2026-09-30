@@ -71,6 +71,11 @@ class BlockPacker implements LoggerAwareInterface
      */
     private const STABILITY_ANGLE = 0.261;
 
+    /**
+     * Largest box dimension for which per-axis fillable length tables are built.
+     */
+    private const MAX_FILLABLE_TABLE = 50000;
+
     private LoggerInterface $logger;
 
     private readonly int $boxWidth;
@@ -145,7 +150,11 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $placements = 0;
 
-    private int $spaceRule = 0;
+    private int $phaseLimit = PHP_INT_MAX;
+
+    private bool $phaseExhausted = false;
+
+    private int $spaceRule = 1;
 
     /**
      * @internal tuning hook
@@ -179,6 +188,11 @@ class BlockPacker implements LoggerAwareInterface
     private function buildFillableTables(): void
     {
         $limits = [$this->boxWidth, $this->boxLength, $this->boxDepth];
+        if ($this->scoring !== 1 || max($limits) > self::MAX_FILLABLE_TABLE) {
+            $this->scoring = 0; // tables would be too large; score on volume alone
+
+            return;
+        }
         foreach ([0, 1, 2] as $axis) {
             $edges = [];
             foreach ($this->orientations as $type => $orientations) {
@@ -326,9 +340,7 @@ class BlockPacker implements LoggerAwareInterface
 
     public function pack(): PackedBox
     {
-        if ($this->scoring === 1) {
-            $this->buildFillableTables();
-        }
+        $this->buildFillableTables();
         $this->deadline = $this->timeLimit === null ? PHP_INT_MAX : hrtime(true) + (int) ($this->timeLimit * 1e9);
         $this->outOfTime = false;
         $this->greedyRuns = 0;
@@ -344,7 +356,9 @@ class BlockPacker implements LoggerAwareInterface
         $rootCompleted = $this->greedy(clone $root);
         $best = $rootCompleted;
 
-        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->outOfTime; $width *= 2) {
+        $this->phaseLimit = $this->placementBudget;
+        $this->phaseExhausted = false;
+        for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->phaseExhausted && !$this->outOfTime; $width *= 2) {
             $best = $this->beamSearch($root, $rootCompleted, $width, $best);
         }
 
@@ -391,7 +405,12 @@ class BlockPacker implements LoggerAwareInterface
                                 return $best;
                             }
                         }
-                        if ($this->placements > $this->placementBudget || hrtime(true) > $this->deadline) {
+                        if ($this->placements > $this->phaseLimit) {
+                            $this->phaseExhausted = true;
+
+                            return $best;
+                        }
+                        if (hrtime(true) > $this->deadline) {
                             $this->outOfTime = true;
 
                             return $best;
@@ -562,11 +581,12 @@ class BlockPacker implements LoggerAwareInterface
         $spaceHeight = $z2 - $z1;
         $spaceWidth = $x2 - $x1;
         $spaceLength = $y2 - $y1;
+        $spaceVolume = $spaceWidth * $spaceLength * $spaceHeight;
         $scoring = $this->scoring;
         [$fillX, $fillY, $fillZ] = $this->fillable;
 
         // Footprint limits [width, length, check support, max area] within which a block at the corner can go
-        if ($z1 === 0) {
+        if ($z1 === 0 || $this->minSupport <= 0.0) {
             $footprints = [[$x2 - $x1, $y2 - $y1, false, PHP_INT_MAX]];
         } else {
             $tops = $state->tops[$z1] ?? [];
@@ -613,8 +633,12 @@ class BlockPacker implements LoggerAwareInterface
                 }
             }
             $volume = $this->volumes[$type];
+            $fitting = min($count, intdiv($spaceVolume, $volume));
+            if ($fitting === 0) {
+                continue;
+            }
             $tracked = $greedy && !$this->constrained[$type];
-            if ($tracked && $count * $volume <= $bestScore) {
+            if ($tracked && $fitting * $volume <= $bestScore) {
                 continue;
             }
             foreach ($this->orientations[$type] as [$ow, $ol, $oh]) {
