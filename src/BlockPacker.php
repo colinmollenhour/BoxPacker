@@ -33,38 +33,42 @@ use const PHP_INT_MAX;
 use const PHP_INT_MIN;
 
 /**
- * Single-container packer that builds the load out of blocks of identical items.
+ * Single-container packer that builds the load out of blocks of identical items (the Thorough strategy).
  *
- * Free space is tracked as a set of (overlapping) maximal empty cuboids. At each step the space nearest to a
- * corner of the container is filled with the best block of identical items that fits it, the block being placed
- * at that corner. A beam search explores alternative block choices, scoring each partial packing by greedily
- * completing it; the beam is widened step by step (1, 2, 4, 8...) so that a result is always available and more
- * effort gives a better answer. Search effort is bounded by a maximum beam width (deterministic) and optionally
- * by a wall-clock time limit.
+ * Free space is tracked as a set of (overlapping) maximal empty cuboids. At each step the lowest free space (then the
+ * one nearest a corner of the container) is filled with the best block of identical items that fits it, placed in
+ * that corner: columns, walls and layers of one item type in one orientation, sized to the space. Blocks are scored
+ * by volume less the part of the gap they leave that no combination of item edges could fill.
  *
- * Every block must be supported from below: by the container floor or the top faces of already packed items
- * covering at least the configured fraction of its base.
+ * A beam search explores alternative block choices, scoring each partial packing by greedily completing it. The beam
+ * is widened step by step (1, 2, 4, 8...) so that a result is always available and more effort gives a better answer.
+ * Effort is bounded by a maximum beam width and a budget of trial placements (both deterministic), and optionally by
+ * a wall-clock time limit.
+ *
+ * Every item must rest on the floor of the container or on the tops of other items over at least the configured
+ * fraction of its base. Rotation rules, the preference for stable orientations, the weight limit and placement
+ * callbacks (ConstrainedPlacementItem) are honoured.
  *
  * @internal
  */
 class BlockPacker implements LoggerAwareInterface
 {
     // Candidate block layout (packed list for speed)
-    public const C_SCORE = 0;
-    public const C_VOLUME = 1;
-    public const C_W = 2;
-    public const C_L = 3;
-    public const C_H = 4;
-    public const C_TYPE = 5;
-    public const C_OW = 6;
-    public const C_OL = 7;
-    public const C_OH = 8;
-    public const C_NX = 9;
-    public const C_NY = 10;
-    public const C_NZ = 11;
-    public const C_X = 12;
-    public const C_Y = 13;
-    public const C_Z = 14;
+    private const C_SCORE = 0;
+    private const C_VOLUME = 1;
+    private const C_W = 2;
+    private const C_L = 3;
+    private const C_H = 4;
+    private const C_TYPE = 5;
+    private const C_OW = 6;
+    private const C_OL = 7;
+    private const C_OH = 8;
+    private const C_NX = 9;
+    private const C_NY = 10;
+    private const C_NZ = 11;
+    private const C_X = 12;
+    private const C_Y = 13;
+    private const C_Z = 14;
 
     /**
      * Minimum angle (radians) between the base and the diagonal for an orientation to count as stable,
@@ -143,45 +147,6 @@ class BlockPacker implements LoggerAwareInterface
 
     private int $packableVolume = 0;
 
-    private float $minSupport = 1.0;
-
-    private int $maxBeamWidth = 8;
-
-    private ?float $timeLimit = null;
-
-    private int $deadline = PHP_INT_MAX;
-
-    private bool $outOfTime = false;
-
-    private int $greedyRuns = 0;
-
-    private int $placementBudget = PHP_INT_MAX;
-
-    private int $placements = 0;
-
-    private int $callbacks = 0;
-
-    private bool $budgetExhausted = false;
-
-    /**
-     * Greedy completions already computed during this search, by signature of the state they started from.
-     *
-     * @var array<string, BlockSearchState>
-     */
-    private array $completions = [];
-
-    private int $spaceRule = 1;
-
-    /**
-     * @internal tuning hook
-     */
-    public function setSpaceRule(int $rule): void
-    {
-        $this->spaceRule = $rule;
-    }
-
-    private int $scoring = 1;
-
     /**
      * For each axis, the longest length up to each value that item edges placeable along that axis can add up to.
      *
@@ -196,67 +161,36 @@ class BlockPacker implements LoggerAwareInterface
      */
     private static array $fillableCache = [];
 
-    /**
-     * @internal tuning hook
-     */
-    public function setScoring(int $scoring): void
-    {
-        $this->scoring = $scoring;
-    }
+    private float $minSupport = 0.5;
+
+    private int $maxBeamWidth = 16;
+
+    private ?float $timeLimit = null;
+
+    private int $placementBudget = PHP_INT_MAX;
+
+    private int $spaceRule = 1;
+
+    private int $scoring = 1;
+
+    private int $deadline = PHP_INT_MAX;
+
+    private bool $outOfTime = false;
+
+    private bool $budgetExhausted = false;
+
+    private int $greedyRuns = 0;
+
+    private int $placements = 0;
+
+    private int $callbacks = 0;
 
     /**
-     * Precompute, per axis, which lengths can be made exactly from item edges (ignoring quantities), so the
-     * unusable part of a gap left next to a block can be looked up.
+     * Greedy completions already computed during this search, by signature of the state they started from.
+     *
+     * @var array<string, BlockSearchState>
      */
-    private function buildFillableTables(): void
-    {
-        $limits = [$this->boxWidth, $this->boxLength, $this->boxDepth];
-        if ($this->scoring !== 1 || max($limits) > self::MAX_FILLABLE_TABLE) {
-            $this->scoring = 0; // tables would be too large; score on volume alone
-
-            return;
-        }
-        foreach ([0, 1, 2] as $axis) {
-            $edges = [];
-            foreach ($this->orientations as $type => $orientations) {
-                if ($this->initialCounts[$type] === 0) {
-                    continue;
-                }
-                foreach ($orientations as $orientation) {
-                    $edges[$orientation[$axis]] = true;
-                }
-            }
-            $limit = $limits[$axis];
-            ksort($edges);
-            $cacheKey = $limit . ':' . implode(',', array_keys($edges));
-            if (isset(self::$fillableCache[$cacheKey])) {
-                $this->fillable[$axis] = self::$fillableCache[$cacheKey];
-                continue;
-            }
-            $reachable = array_fill(0, $limit + 1, false);
-            $reachable[0] = true;
-            foreach (array_keys($edges) as $edge) {
-                for ($length = $edge; $length <= $limit; ++$length) {
-                    if (!$reachable[$length] && $reachable[$length - $edge]) {
-                        $reachable[$length] = true;
-                    }
-                }
-            }
-            $best = 0;
-            $table = [];
-            for ($length = 0; $length <= $limit; ++$length) {
-                if ($reachable[$length]) {
-                    $best = $length;
-                }
-                $table[$length] = $best;
-            }
-            $this->fillable[$axis] = $table;
-            if (count(self::$fillableCache) >= self::FILLABLE_CACHE_SIZE) {
-                self::$fillableCache = [];
-            }
-            self::$fillableCache[$cacheKey] = $table;
-        }
-    }
+    private array $completions = [];
 
     /**
      * @param iterable<Item> $items
@@ -308,21 +242,6 @@ class BlockPacker implements LoggerAwareInterface
         }
     }
 
-    /**
-     * Recalculate the size below which a free space cannot hold any remaining item.
-     */
-    private function updateSpaceFilter(BlockSearchState $state): void
-    {
-        $state->minHeight = $state->minFootprintEdge = $state->minVolume = PHP_INT_MAX;
-        foreach ($state->counts as $type => $count) {
-            if ($count > 0) {
-                $state->minHeight = min($state->minHeight, $this->minHeights[$type]);
-                $state->minFootprintEdge = min($state->minFootprintEdge, $this->minFootprintEdges[$type]);
-                $state->minVolume = min($state->minVolume, $this->volumes[$type]);
-            }
-        }
-    }
-
     public function setLogger(LoggerInterface $logger): void
     {
         $this->logger = $logger;
@@ -359,6 +278,24 @@ class BlockPacker implements LoggerAwareInterface
     public function setPlacementBudget(?int $placements): void
     {
         $this->placementBudget = $placements ?? PHP_INT_MAX;
+    }
+
+    /**
+     * Tuning hook for experiments (bin/benchmark): 1 (default) fills the lowest free space first, then the one
+     * nearest a corner; 0 fills the space nearest a corner in any direction, lowest distance first.
+     */
+    public function setSpaceRule(int $rule): void
+    {
+        $this->spaceRule = $rule;
+    }
+
+    /**
+     * Tuning hook for experiments (bin/benchmark): 1 (default) scores blocks by volume less the gap next to them
+     * that item edges cannot fill; 0 by volume alone.
+     */
+    public function setScoring(int $scoring): void
+    {
+        $this->scoring = $scoring;
     }
 
     public function getPlacements(): int
@@ -1184,6 +1121,21 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
+     * Recalculate the size below which a free space cannot hold any remaining item.
+     */
+    private function updateSpaceFilter(BlockSearchState $state): void
+    {
+        $state->minHeight = $state->minFootprintEdge = $state->minVolume = PHP_INT_MAX;
+        foreach ($state->counts as $type => $count) {
+            if ($count > 0) {
+                $state->minHeight = min($state->minHeight, $this->minHeights[$type]);
+                $state->minFootprintEdge = min($state->minFootprintEdge, $this->minFootprintEdges[$type]);
+                $state->minVolume = min($state->minVolume, $this->volumes[$type]);
+            }
+        }
+    }
+
+    /**
      * @param array<int, int|float> $placement
      * @param array<int, int>       $next      per-type index of the next item object to hand out
      */
@@ -1244,5 +1196,59 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return $stable !== [] ? $stable : array_values($fitting);
+    }
+
+    /**
+     * Precompute, per axis, which lengths can be made exactly from item edges (ignoring quantities), so the
+     * unusable part of a gap left next to a block can be looked up.
+     */
+    private function buildFillableTables(): void
+    {
+        $limits = [$this->boxWidth, $this->boxLength, $this->boxDepth];
+        if ($this->scoring !== 1 || max($limits) > self::MAX_FILLABLE_TABLE) {
+            $this->scoring = 0; // tables would be too large; score on volume alone
+
+            return;
+        }
+        foreach ([0, 1, 2] as $axis) {
+            $edges = [];
+            foreach ($this->orientations as $type => $orientations) {
+                if ($this->initialCounts[$type] === 0) {
+                    continue;
+                }
+                foreach ($orientations as $orientation) {
+                    $edges[$orientation[$axis]] = true;
+                }
+            }
+            $limit = $limits[$axis];
+            ksort($edges);
+            $cacheKey = $limit . ':' . implode(',', array_keys($edges));
+            if (isset(self::$fillableCache[$cacheKey])) {
+                $this->fillable[$axis] = self::$fillableCache[$cacheKey];
+                continue;
+            }
+            $reachable = array_fill(0, $limit + 1, false);
+            $reachable[0] = true;
+            foreach (array_keys($edges) as $edge) {
+                for ($length = $edge; $length <= $limit; ++$length) {
+                    if (!$reachable[$length] && $reachable[$length - $edge]) {
+                        $reachable[$length] = true;
+                    }
+                }
+            }
+            $best = 0;
+            $table = [];
+            for ($length = 0; $length <= $limit; ++$length) {
+                if ($reachable[$length]) {
+                    $best = $length;
+                }
+                $table[$length] = $best;
+            }
+            $this->fillable[$axis] = $table;
+            if (count(self::$fillableCache) >= self::FILLABLE_CACHE_SIZE) {
+                self::$fillableCache = [];
+            }
+            self::$fillableCache[$cacheKey] = $table;
+        }
     }
 }
