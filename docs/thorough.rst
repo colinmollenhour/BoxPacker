@@ -30,6 +30,9 @@ BoxPacker has two packing strategies:
         $volumePacker->setStrategy(PackingStrategy::Thorough);
         $packedBox = $volumePacker->pack(); // or ->packBestSubset()
 
+.. image:: images/thorough-vs-fast.png
+    :alt: The same container packed by the Fast strategy (74.6% full) and the Thorough strategy (94.7% full)
+
 How it works
 ------------
 
