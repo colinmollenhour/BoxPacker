@@ -45,5 +45,13 @@ Every strategy is deterministic unless a time limit is given, so the same comman
 figures. Each packed box is also checked independently for overlaps, items outside the box, disallowed orientations
 and overweight boxes, and the smallest fraction of any item's base that is supported is reported.
 
-The PHPUnit suites in ``tests/Published*Test.php`` hold the expected per-instance results for regression testing;
-``tests/data/*-lastrun.csv`` receives the values of the latest run.
+The PHPUnit suites in ``tests/Published*Test.php`` and ``tests/BookShop*Test.php`` hold the expected per-instance
+results for regression testing; ``tests/data/*-lastrun.csv`` receives the values of the latest run. The thorough
+strategy's baselines are in the ``efficiency-thorough`` group, which is not run by default:
+
+.. code-block:: shell
+
+    php -d memory_limit=-1 vendor/bin/phpunit --group efficiency-thorough
+
+After an intentional change to the algorithm, regenerate them with ``bin/benchmark --strategy=thorough --datasets=...
+--csv=...`` and review the differences.
