@@ -133,8 +133,9 @@ The same settings are available on ``Packer``, where the budget applies to each 
 limit for the whole of ``pack()``, shared between filling the boxes and searching for better ones; the boxes are always
 completed.
 
-As a guide, with the defaults on PHP 8.4 a typical e-commerce order is packed in 10-20 milliseconds; container loads of
-100-150 items of 3-20 types take around 0.2-1.5 seconds, and of 30-100 types 1-4 seconds.
+As a guide, with the defaults on PHP 8.4 a typical e-commerce order is packed in about 10 milliseconds; container loads
+of 100-150 items of 3-20 types take around 0.1-0.6 seconds, and of 30-100 types 0.7-1.5 seconds. Large multi-box
+orders of many different items take longer: several seconds for 150 different items across 4 cartons.
 
 Things the thorough strategy does not do
 ----------------------------------------

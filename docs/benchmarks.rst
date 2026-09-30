@@ -35,12 +35,12 @@ per instance:
 Dataset                Fast               Thorough                         Thorough time
 =====================  =================  ===============================  =================
 Loh & Nee              64.4% utilisation  71.0%                            0.03s mean
-BR1-4 (3-10 types)     79.2 - 79.5%       93.5 - 94.4%                     0.15 - 0.56s mean
-BR5-7 (12-20 types)    77.3 - 78.7%       93.2 - 94.0%                     0.6 - 0.75s mean
-BR8-15 (30-100 types)  74.2 - 76.4%       88.6 - 92.5%                     0.8 - 1.7s mean
-Ivancic                726 containers     698 containers                   0.18s mean
-Bookshop (3D)          4,557 cartons      4,560 cartons, 2.0% less volume  0.010s mean
-Bookshop (2D)          5,832 cartons      5,814 cartons, 9.5% less volume  0.011s mean
+BR1-4 (3-10 types)     79.2 - 79.5%       93.5 - 94.4%                     0.13 - 0.42s mean
+BR5-7 (12-20 types)    77.3 - 78.7%       93.0 - 93.9%                     0.46 - 0.61s mean
+BR8-15 (30-100 types)  74.2 - 76.4%       88.6 - 92.4%                     0.72 - 1.45s mean
+Ivancic                726 containers     697 containers                   0.17s mean
+Bookshop (3D)          4,557 cartons      4,560 cartons, 1.9% less volume  0.009s mean
+Bookshop (2D)          5,832 cartons      5,814 cartons, 9.4% less volume  0.011s mean
 =====================  =================  ===============================  =================
 
 ``Thorough`` packs more volume than ``Fast`` in every one of the 1,500 BR instances. On the bookshop corpus, the few
