@@ -3,8 +3,13 @@
 *.PDF -text
 *.xlsx -text
 
-/docs export-ignore
-/features export-ignore
-/visualiser export-ignore
+# Keep release archives (GitHub zipballs, Packagist dists) to src/, composer.json and the licence
 /.* export-ignore
 /*.dist export-ignore
+/*.dist.php export-ignore
+/*.md export-ignore
+/bin export-ignore
+/docs export-ignore
+/features export-ignore
+/tests export-ignore
+/visualiser export-ignore

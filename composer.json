@@ -52,8 +52,26 @@
     },
     "autoload": {
         "psr-4": {
-            "DVDoug\\BoxPacker\\": ["src/", "tests/"]
+            "DVDoug\\BoxPacker\\": "src/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "DVDoug\\BoxPacker\\": "tests/"
+        }
+    },
+    "archive": {
+        "exclude": [
+            "/.*",
+            "/*.dist",
+            "/*.dist.php",
+            "/*.md",
+            "/bin",
+            "/docs",
+            "/features",
+            "/tests",
+            "/visualiser"
+        ]
     },
     "extra": {
         "branch-alias": {
