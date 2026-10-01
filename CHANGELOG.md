@@ -18,6 +18,10 @@
   still be used. Identical angled items nest side by side and other items fill the empty corners beside them.
   `PackedItem` gains `angle`, `boundingWidth`, `boundingLength` and `isAngled()`
 
+### Changed
+- Release archives (and so `composer require` with a dist install) now contain only `src/`, `composer.json` and the
+  licence, with no tests, docs or benchmark tooling. The `tests/` namespace moved from `autoload` to `autoload-dev`
+
 ### Fixed
 - `VolumePacker::pack()` no longer fails when given an empty item list
 
