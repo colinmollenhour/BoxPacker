@@ -21,6 +21,7 @@ BoxPacker is licensed under the `MIT license`_.
     installation
     principles
     getting-started
+    thorough
     rotation
     sortation
     weight-distribution
@@ -32,4 +33,5 @@ BoxPacker is licensed under the `MIT license`_.
     used-remaining-space
     all-permutations
     single-box
+    benchmarks
     changelog

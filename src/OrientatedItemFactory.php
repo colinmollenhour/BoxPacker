@@ -303,8 +303,12 @@ class OrientatedItemFactory implements LoggerAwareInterface
      */
     private function generatePermutations(Item $item, ?OrientatedItem $prevItem): array
     {
-        // Special case items that are the same as what we just packed - keep orientation
-        if ($prevItem !== null && $prevItem->isSameDimensions($item)) {
+        // Special case items that are the same as what we just packed - keep orientation (if this item may be packed that way)
+        if ($prevItem !== null && $prevItem->isSameDimensions($item) && match ($item->getAllowedRotation()) {
+            Rotation::BestFit => true,
+            Rotation::KeepFlat => $prevItem->depth === $item->getDepth(),
+            Rotation::Never => $prevItem->width === $item->getWidth() && $prevItem->length === $item->getLength() && $prevItem->depth === $item->getDepth(),
+        }) {
             return [[$prevItem->width, $prevItem->length, $prevItem->depth]];
         }
 

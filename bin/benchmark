@@ -1,0 +1,123 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Box packing (3D bin packing, knapsack problem).
+ *
+ * @author Doug Wright
+ */
+declare(strict_types=1);
+
+use DVDoug\BoxPacker\Benchmark\BenchmarkRunner;
+use DVDoug\BoxPacker\Benchmark\InstanceLoader;
+use DVDoug\BoxPacker\Benchmark\Strategies;
+
+require __DIR__ . '/../vendor/autoload.php';
+
+ini_set('memory_limit', '-1');
+
+$usage = <<<'USAGE'
+    Usage: bin/benchmark [options]
+
+      --strategy=NAME     strategy to run (default: legacy); --list to see all
+      --datasets=SPEC     comma list of datasets or groups (default: published)
+                          groups: ecommerce, container, extreme, bookshop, published, all; ranges like br1-7
+      --limit=N           only the first N instances of each dataset (0 = all)
+      --jobs=N            parallel worker processes (default: 4)
+      --opt=KEY=VALUE     strategy option, repeatable (e.g. --opt=width=8 --opt=time=2)
+      --save=PATH         write full results (summary + per-instance rows) as JSON
+      --compare=PATH      compare against a previously saved result
+      --rows              print one line per instance
+      --csv=PATH          write "test name,utilisation" lines (the format of tests/data/*-expected*.csv)
+      --list              list strategies
+
+    USAGE;
+
+$opts = getopt('', ['strategy:', 'datasets:', 'limit:', 'jobs:', 'opt:', 'save:', 'compare:', 'rows', 'csv:', 'list', 'worker', 'shard:', 'help']);
+
+if (isset($opts['help'])) {
+    echo $usage;
+    exit(0);
+}
+if (isset($opts['list'])) {
+    foreach (Strategies::describe() as $name => $description) {
+        printf("%-16s %s\n", $name, $description);
+    }
+    exit(0);
+}
+
+$strategy = $opts['strategy'] ?? 'legacy';
+$datasetSpec = $opts['datasets'] ?? 'published';
+$datasets = InstanceLoader::expandDatasetNames($datasetSpec);
+$limit = (int) ($opts['limit'] ?? 0);
+$jobs = max(1, (int) ($opts['jobs'] ?? 4));
+$strategyOptions = [];
+foreach ((array) ($opts['opt'] ?? []) as $kv) {
+    [$k, $v] = array_pad(explode('=', $kv, 2), 2, '1');
+    $strategyOptions[$k] = $v;
+}
+
+$runner = new BenchmarkRunner($strategy, $strategyOptions);
+
+if (isset($opts['worker'])) {
+    [$shard, $shards] = array_map('intval', explode('/', $opts['shard'] ?? '0/1'));
+    echo json_encode($runner->runShard($datasets, $limit, $shard, $shards), JSON_THROW_ON_ERROR);
+    exit(0);
+}
+
+$workerArgs = ["--strategy={$strategy}", "--datasets={$datasetSpec}", "--limit={$limit}"];
+foreach ($strategyOptions as $k => $v) {
+    $workerArgs[] = "--opt={$k}={$v}";
+}
+
+$wallStart = hrtime(true);
+$rows = $jobs === 1
+    ? BenchmarkRunner::sortRows($runner->runShard($datasets, $limit, 0, 1), $datasets)
+    : $runner->runParallel(__FILE__, $datasets, $limit, $jobs, $workerArgs);
+$wall = (hrtime(true) - $wallStart) / 1e9;
+
+$summary = BenchmarkRunner::summarise($rows);
+
+$baseline = null;
+if (isset($opts['compare'])) {
+    $baseline = BenchmarkRunner::loadResult($opts['compare']);
+}
+
+if (isset($opts['rows'])) {
+    foreach ($rows as $row) {
+        if ($row['kind'] === 'single') {
+            printf("%-12s %-8s util %5.1f%% packed %d/%d %.3fs\n", $row['dataset'], $row['id'], $row['util'], $row['packed'], $row['items'], $row['time']);
+        } else {
+            printf("%-12s %-34s boxes %d lb %d vol %d packed %d/%d %.3fs\n", $row['dataset'], $row['id'], $row['boxes'], $row['lb'], $row['boxVolume'], $row['packed'], $row['items'], $row['time']);
+        }
+    }
+}
+
+$optionText = $strategyOptions ? ' ' . json_encode($strategyOptions) : '';
+echo BenchmarkRunner::formatSummary($summary, $baseline['summary'] ?? null, "strategy {$strategy}{$optionText}, wall {$wall}s, jobs {$jobs}");
+if ($baseline) {
+    echo BenchmarkRunner::formatWinLoss($rows, $baseline['rows']);
+}
+
+if (isset($opts['csv'])) {
+    $csv = '';
+    foreach ($rows as $row) {
+        $csv .= InstanceLoader::testName($row['dataset'], $row['id']) . ',' . ($row['kind'] === 'single' ? sprintf('%.1f', $row['util']) : $row['boxes']) . "\n";
+    }
+    file_put_contents($opts['csv'], $csv);
+    echo "wrote {$opts['csv']}\n";
+}
+
+if (isset($opts['save'])) {
+    BenchmarkRunner::save($opts['save'], [
+        'strategy' => $strategy,
+        'options' => $strategyOptions,
+        'datasets' => $datasets,
+        'limit' => $limit,
+        'php' => PHP_VERSION,
+        'wall' => $wall,
+        'summary' => $summary,
+        'rows' => $rows,
+    ]);
+    echo "saved {$opts['save']}\n";
+}

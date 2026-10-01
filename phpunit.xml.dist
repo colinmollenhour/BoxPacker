@@ -24,6 +24,7 @@
     <exclude>
       <group>efficiency-container</group>
       <group>efficiency-extreme</group>
+      <group>efficiency-thorough</group>
     </exclude>
   </groups>
 
@@ -33,7 +34,9 @@
     </include>
   </source>
 
-  <coverage pathCoverage="true">
+  <!-- no path coverage: Xdebug's path tracking slows down quadratically with the number of calls made in one run,
+       which turned the search-heavy Thorough tests from seconds into hours -->
+  <coverage pathCoverage="false">
     <report>
       <text outputFile="php://stdout" showUncoveredFiles="true"/>
       <html outputDirectory="build/coverage-phpunit"/>
