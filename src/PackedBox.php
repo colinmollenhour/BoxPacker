@@ -98,7 +98,7 @@ readonly class PackedBox implements JsonSerializable
         $maxWidth = 0;
 
         foreach ($this->items as $item) {
-            $maxWidth = max($maxWidth, $item->x + $item->width);
+            $maxWidth = max($maxWidth, $item->x + $item->boundingWidth);
         }
 
         return $maxWidth;
@@ -112,7 +112,7 @@ readonly class PackedBox implements JsonSerializable
         $maxLength = 0;
 
         foreach ($this->items as $item) {
-            $maxLength = max($maxLength, $item->y + $item->length);
+            $maxLength = max($maxLength, $item->y + $item->boundingLength);
         }
 
         return $maxLength;
@@ -197,7 +197,7 @@ readonly class PackedBox implements JsonSerializable
             $this->box->getInnerLength(),
             $this->box->getInnerDepth(),
             array_map(
-                static fn (PackedItem $item) => [$splIdToIntMap[spl_object_id($item->item)], $item->x, $item->y, $item->z, $item->width, $item->length, $item->depth],
+                static fn (PackedItem $item) => [$splIdToIntMap[spl_object_id($item->item)], $item->x, $item->y, $item->z, $item->width, $item->length, $item->depth, ...($item->isAngled() ? [round($item->angle, 3)] : [])],
                 iterator_to_array($this->items)
             ),
         ];
@@ -252,19 +252,23 @@ readonly class PackedBox implements JsonSerializable
             $itemToCheck = array_pop($itemsToCheck);
 
             assert($itemToCheck->x >= 0);
-            assert($itemToCheck->x + $itemToCheck->width <= $this->box->getInnerWidth());
+            assert($itemToCheck->x + $itemToCheck->boundingWidth <= $this->box->getInnerWidth());
             assert($itemToCheck->y >= 0);
-            assert($itemToCheck->y + $itemToCheck->length <= $this->box->getInnerLength());
+            assert($itemToCheck->y + $itemToCheck->boundingLength <= $this->box->getInnerLength());
             assert($itemToCheck->z >= 0);
             assert($itemToCheck->z + $itemToCheck->depth <= $this->box->getInnerDepth());
             assert($this->packedDimensionsMatchItem($itemToCheck));
 
             foreach ($itemsToCheck as $otherItem) {
-                $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->width) && $otherItem->x < ($itemToCheck->x + $itemToCheck->width);
-                $hasYOverlap = $itemToCheck->y < ($otherItem->y + $otherItem->length) && $otherItem->y < ($itemToCheck->y + $itemToCheck->length);
+                $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->boundingWidth) && $otherItem->x < ($itemToCheck->x + $itemToCheck->boundingWidth);
+                $hasYOverlap = $itemToCheck->y < ($otherItem->y + $otherItem->boundingLength) && $otherItem->y < ($itemToCheck->y + $itemToCheck->boundingLength);
                 $hasZOverlap = $itemToCheck->z < ($otherItem->z + $otherItem->depth) && $otherItem->z < ($itemToCheck->z + $itemToCheck->depth);
 
                 $hasOverlap = $hasXOverlap && $hasYOverlap && $hasZOverlap;
+                if ($hasOverlap && ($itemToCheck->isAngled() || $otherItem->isAngled())) {
+                    // the bounding boxes overlap, but angled items only occupy part of theirs
+                    $hasOverlap = AngledGeometry::polygonsOverlap(AngledGeometry::footprint($itemToCheck), AngledGeometry::footprint($otherItem));
+                }
                 assert(!$hasOverlap);
             }
         }
@@ -289,7 +293,7 @@ readonly class PackedBox implements JsonSerializable
         }
 
         return match ($item->getAllowedRotation()) {
-            Rotation::Never => $packed === $defined,
+            Rotation::Never => $packed === $defined && !$packedItem->isAngled(),
             Rotation::KeepFlat => $packedItem->depth === $item->getDepth(),
             Rotation::BestFit => true,
         };

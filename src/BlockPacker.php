@@ -13,8 +13,11 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
+use function array_column;
 use function array_fill;
+use function array_key_exists;
 use function array_keys;
+use function array_map;
 use function array_slice;
 use function array_values;
 use function atan;
@@ -25,6 +28,7 @@ use function intdiv;
 use function ksort;
 use function max;
 use function min;
+use function rad2deg;
 use function sort;
 use function spl_object_id;
 use function usort;
@@ -44,6 +48,10 @@ use const PHP_INT_MIN;
  * is widened step by step (1, 2, 4, 8...) so that a result is always available and more effort gives a better answer.
  * Effort is bounded by a maximum beam width and a budget of trial placements (both deterministic), and optionally by
  * a wall-clock time limit.
+ *
+ * Optionally, items too long to fit the container any other way can be turned about the vertical axis just enough
+ * to fit (angled placement). Identical angled items are laid parallel, each tucked into the triangle beside the last,
+ * and the empty triangles left in the corners of the group are offered as free space for other items.
  *
  * Every item must rest on the floor of the container or on the tops of other items over at least the configured
  * fraction of its base. Rotation rules, the preference for stable orientations, the weight limit and placement
@@ -69,6 +77,10 @@ class BlockPacker implements LoggerAwareInterface
     private const C_X = 12;
     private const C_Y = 13;
     private const C_Z = 14;
+    // angled blocks only: layout id, direction (0: items span x and repeat along y, 1: the reverse), top of the space
+    private const C_ANGLED = 15;
+    private const C_DIR = 16;
+    private const C_ZTOP = 17;
 
     /**
      * Minimum angle (radians) between the base and the diagonal for an orientation to count as stable,
@@ -154,6 +166,36 @@ class BlockPacker implements LoggerAwareInterface
     private array $flatItems = [];
 
     private int $packableVolume = 0;
+
+    private bool $allowAngled = false;
+
+    /**
+     * Types that only fit the box turned at an angle: the ways up they can go, as [long side, short side, height].
+     *
+     * @var array<int, list<array{0: int, 1: int, 2: int}>>
+     */
+    private array $angledUprights = [];
+
+    /**
+     * Angled layouts (see {@see AngledGeometry::layout()}) by id, with the item's long and short sides.
+     *
+     * @var list<array{angle: float, width: int, itemLength: int, pitch: int, long: int, short: int}>
+     */
+    private array $angledLayouts = [];
+
+    /**
+     * Layout ids by long side, short side and span (null: impossible).
+     *
+     * @var array<string, int|null>
+     */
+    private array $angledLayoutIds = [];
+
+    /**
+     * Support rectangles and corner spaces of angled blocks, relative to the block, by layout, count and direction.
+     *
+     * @var array<string, array{0: list<array{0: int, 1: int, 2: int, 3: int}>, 1: list<array{0: int, 1: int, 2: int, 3: int}>}>
+     */
+    private array $angledShapes = [];
 
     /**
      * For each axis, the longest length up to each value that item edges placeable along that axis can add up to.
@@ -300,6 +342,33 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
+     * Allow items that fit no other way to be turned about the vertical axis just enough to fit (not items that
+     * cannot be rotated, nor items with placement callbacks, which cannot be told about the angle).
+     */
+    public function setAllowAngledPlacement(bool $allow): void
+    {
+        if (!$allow || $this->allowAngled) {
+            return;
+        }
+        $this->allowAngled = true;
+
+        foreach ($this->orientations as $type => $orientations) {
+            if ($orientations !== [] || $this->constrained[$type] || $this->weights[$type] > $this->weightCapacity) {
+                continue;
+            }
+            $uprights = $this->buildAngledUprights($this->itemsByType[$type][0]);
+            if ($uprights === []) {
+                continue;
+            }
+            $this->angledUprights[$type] = $uprights;
+            $this->initialCounts[$type] = count($this->itemsByType[$type]);
+            $this->packableVolume += $this->initialCounts[$type] * $this->volumes[$type];
+            $this->minHeights[$type] = min(array_column($uprights, 2));
+            $this->minFootprintEdges[$type] = min(array_column($uprights, 1));
+        }
+    }
+
+    /**
      * Tuning hook for experiments (bin/benchmark): 1 (default) fills the lowest free space first, then the one
      * nearest a corner; 0 fills the space nearest a corner in any direction, lowest distance first.
      */
@@ -431,7 +500,7 @@ class BlockPacker implements LoggerAwareInterface
     {
         $keys = [];
         foreach ($state->placements as $placement) {
-            $keys[] = $placement[self::C_TYPE] . ',' . $placement[self::C_OW] . ',' . $placement[self::C_OL] . ',' . $placement[self::C_OH] . ',' . $placement[self::C_NX] . ',' . $placement[self::C_NY] . ',' . $placement[self::C_NZ] . ',' . $placement[self::C_X] . ',' . $placement[self::C_Y] . ',' . $placement[self::C_Z];
+            $keys[] = $placement[self::C_TYPE] . ',' . $placement[self::C_OW] . ',' . $placement[self::C_OL] . ',' . $placement[self::C_OH] . ',' . $placement[self::C_NX] . ',' . $placement[self::C_NY] . ',' . $placement[self::C_NZ] . ',' . $placement[self::C_X] . ',' . $placement[self::C_Y] . ',' . $placement[self::C_Z] . (isset($placement[self::C_ANGLED]) ? ',a' . $placement[self::C_ANGLED] . ',' . $placement[self::C_DIR] : '');
         }
         sort($keys);
 
@@ -753,6 +822,77 @@ class BlockPacker implements LoggerAwareInterface
                     }
                 }
             }
+
+            // Items that only fit turned at an angle: rows of parallel items (stacked in layers), turned just enough
+            // to span the footprint in one direction. Only placed where their whole bounding box is supported.
+            foreach ($this->angledUprights[$type] ?? [] as [$long, $short, $oh]) {
+                if ($oh > $spaceHeight) {
+                    continue;
+                }
+                $mz = intdiv($spaceHeight, $oh);
+                foreach ($footprints as [$maxWidth, $maxLength, $checkSupport]) {
+                    if ($checkSupport) {
+                        continue;
+                    }
+                    for ($direction = 0; $direction <= 1; ++$direction) {
+                        $layoutId = $this->angledLayout($long, $short, $direction === 0 ? $maxWidth : $maxLength);
+                        if ($layoutId === null) {
+                            continue;
+                        }
+                        ['width' => $spanned, 'itemLength' => $itemLength, 'pitch' => $pitch] = $this->angledLayouts[$layoutId];
+                        $across = $direction === 0 ? $maxLength : $maxWidth;
+                        if ($itemLength > $across) {
+                            continue;
+                        }
+                        $mn = 1 + intdiv($across - $itemLength, $pitch);
+                        $capacity = $mn * $mz;
+                        if ($tracked && ($capacity < $count ? $capacity : $count) * $volume <= $bestScore) {
+                            continue;
+                        }
+                        if ($capacity <= $count) {
+                            $variants = [[$mn, $mz]];
+                        } elseif ($count === 1) {
+                            $variants = [[1, 1]];
+                        } else {
+                            // not enough for a full block: a full row stacked as high as possible, or a full stack
+                            // made as long as possible
+                            $n = min($mn, $count);
+                            $k = min($mz, intdiv($count, $n));
+                            $variants = [$n . ',' . $k => [$n, $k]];
+                            $k = min($mz, $count);
+                            $n = min($mn, intdiv($count, $k));
+                            $variants[$n . ',' . $k] = [$n, $k];
+                        }
+                        foreach ($variants as [$n, $k]) {
+                            $blockVolume = $n * $k * $volume;
+                            $rowLength = $itemLength + ($n - 1) * $pitch;
+                            $w = $direction === 0 ? $spanned : $rowLength;
+                            $l = $direction === 0 ? $rowLength : $spanned;
+                            $h = $k * $oh;
+                            if ($scoring === 1) {
+                                $rx = $spaceWidth - $w;
+                                $ry = $spaceLength - $l;
+                                $rz = $spaceHeight - $h;
+                                $score = $blockVolume - ($rx - $fillX[$rx]) * $l * $h - ($ry - $fillY[$ry]) * $w * $h - ($rz - $fillZ[$rz]) * $w * $l;
+                            } else {
+                                $score = $blockVolume;
+                            }
+                            if ($tracked && $score <= $bestScore) {
+                                continue;
+                            }
+                            $x = $lowX ? $x1 : $x2 - $w;
+                            $y = $lowY ? $y1 : $y2 - $l;
+                            $candidate = [$score, $blockVolume, $w, $l, $h, $type, $long, $short, $oh, $direction === 0 ? 1 : $n, $direction === 0 ? $n : 1, $k, $x, $y, $z1, $layoutId, $direction, $z2];
+                            if ($tracked) {
+                                $best = $candidate;
+                                $bestScore = $score;
+                            } else {
+                                $candidates[] = $candidate;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if ($greedy) {
@@ -780,7 +920,7 @@ class BlockPacker implements LoggerAwareInterface
         $chosen = [];
         $seen = [];
         foreach ($candidates as $candidate) {
-            $key = $candidate[self::C_TYPE] . ',' . $candidate[self::C_OW] . ',' . $candidate[self::C_OL] . ',' . $candidate[self::C_OH] . ',' . $candidate[self::C_NX] . ',' . $candidate[self::C_NY] . ',' . $candidate[self::C_NZ] . ',' . $candidate[self::C_X] . ',' . $candidate[self::C_Y];
+            $key = $candidate[self::C_TYPE] . ',' . $candidate[self::C_OW] . ',' . $candidate[self::C_OL] . ',' . $candidate[self::C_OH] . ',' . $candidate[self::C_NX] . ',' . $candidate[self::C_NY] . ',' . $candidate[self::C_NZ] . ',' . $candidate[self::C_X] . ',' . $candidate[self::C_Y] . (isset($candidate[self::C_ANGLED]) ? ',a' . $candidate[self::C_ANGLED] . ',' . $candidate[self::C_DIR] : '');
             if (isset($seen[$key])) {
                 continue;
             }
@@ -964,7 +1104,7 @@ class BlockPacker implements LoggerAwareInterface
     {
         $context = clone $this->context($state);
         $next = [];
-        foreach ($this->itemsOf($candidate) as [$type, $x, $y, $z, $w, $l, $h]) {
+        foreach ($this->itemsOf($candidate) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
             $next[$type] ??= $this->initialCounts[$type] - $state->counts[$type];
             $item = $this->itemsByType[$type][$next[$type]++];
             if ($item instanceof ConstrainedPlacementItem) {
@@ -975,17 +1115,18 @@ class BlockPacker implements LoggerAwareInterface
                     return false;
                 }
             }
-            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h));
+            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle));
         }
 
         return true;
     }
 
     /**
-     * The individual items of a placed block, bottom-up, as [type, x, y, z, width, length, height].
+     * The individual items of a placed block, bottom-up, as [type, x, y, z, width, length, height, angle]. The
+     * items of an angled block are offset by the layout's pitch and positioned by their bounding boxes.
      *
-     * @param  array<int, int|float>                                               $candidate
-     * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int}>
+     * @param  array<int, int|float>                                                         $candidate
+     * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int, 7: float}>
      */
     private function itemsOf(array $candidate): array
     {
@@ -995,10 +1136,18 @@ class BlockPacker implements LoggerAwareInterface
         $z = $candidate[self::C_Z];
         $items = [];
         [$ow, $ol, $oh, $nx, $ny, $nz] = [$candidate[self::C_OW], $candidate[self::C_OL], $candidate[self::C_OH], $candidate[self::C_NX], $candidate[self::C_NY], $candidate[self::C_NZ]];
+        $angle = 0.0;
+        if (isset($candidate[self::C_ANGLED])) {
+            $layout = $this->angledLayouts[$candidate[self::C_ANGLED]];
+            // mirroring the layout into the other direction turns the items the other way from the y axis
+            $angle = $candidate[self::C_DIR] === 0 ? rad2deg($layout['angle']) : 90.0 - rad2deg($layout['angle']);
+            $ow = $nx > 1 ? $layout['pitch'] : 0; // step between items; the items' own sides are long × short
+            $ol = $ny > 1 ? $layout['pitch'] : 0;
+        }
         for ($iz = 0; $iz < $nz; ++$iz) {
             for ($iy = 0; $iy < $ny; ++$iy) {
                 for ($ix = 0; $ix < $nx; ++$ix) {
-                    $items[] = [$type, $x + $ix * $ow, $y + $iy * $ol, $z + $iz * $oh, $ow, $ol, $oh];
+                    $items[] = [$type, $x + $ix * $ow, $y + $iy * $ol, $z + $iz * $oh, $candidate[self::C_OW], $candidate[self::C_OL], $oh, $angle];
                 }
             }
         }
@@ -1042,12 +1191,30 @@ class BlockPacker implements LoggerAwareInterface
         $state->counts[$type] -= $n;
         $state->remaining -= $n;
         $state->weightLeft -= $n * $this->weights[$type];
-        $state->tops[$z2][] = [$x, $y, $x2, $y2];
+        $angled = isset($candidate[self::C_ANGLED]);
+        if ($angled) {
+            // an angled block's top is only partly solid; offer what lies under it, and the empty corners as space
+            [$supports, $corners] = $this->angledShape($candidate);
+            foreach ($supports as [$rx, $ry, $rw, $rl]) {
+                $state->tops[$z2][] = [$x + $rx, $y + $ry, $x + $rx + $rw, $y + $ry + $rl];
+            }
+        } else {
+            $state->tops[$z2][] = [$x, $y, $x2, $y2];
+        }
         // the filter only changes if the type just used up was the one setting one of its minimums
         if ($state->counts[$type] === 0 && ($this->minHeights[$type] <= $state->minHeight || $this->minFootprintEdges[$type] <= $state->minFootprintEdge || $this->volumes[$type] <= $state->minVolume)) {
             $this->updateSpaceFilter($state);
         }
         $state->spaces = $this->occupy($state, $x, $y, $z, $x2, $y2, $z2);
+        if ($angled) {
+            $zTop = $candidate[self::C_ZTOP];
+            foreach ($corners as [$rx, $ry, $rw, $rl]) {
+                if ($rw < $state->minFootprintEdge || $rl < $state->minFootprintEdge || $zTop - $z < $state->minHeight || $rw * $rl * ($zTop - $z) < $state->minVolume) {
+                    continue;
+                }
+                $state->spaces[] = [$x + $rx, $y + $ry, $z, $x + $rx + $rw, $y + $ry + $rl, $zTop];
+            }
+        }
         $state->volume += $candidate[self::C_VOLUME];
         $state->placements[] = $candidate;
     }
@@ -1165,9 +1332,9 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function appendItems(PackedItemList $list, array $placement, array &$next): void
     {
-        foreach ($this->itemsOf($placement) as [$type, $x, $y, $z, $w, $l, $h]) {
+        foreach ($this->itemsOf($placement) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
             $index = $next[$type] ?? 0;
-            $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h));
+            $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h, $angle));
             $next[$type] = $index + 1;
         }
     }
@@ -1234,6 +1401,94 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return $stable !== [] ? $stable : array_values($fitting);
+    }
+
+    /**
+     * The ways up an item can go when turned at an angle, as [long side, short side, height], keeping only those
+     * that fit the empty box in at least one direction (and only stable ones where there are any).
+     *
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private function buildAngledUprights(Item $item): array
+    {
+        $fitting = [];
+        foreach (AngledGeometry::uprights($item) as [$long, $short, $h]) {
+            if ($h > $this->boxDepth) {
+                continue;
+            }
+            $acrossWidth = $this->angledLayout($long, $short, $this->boxWidth);
+            $acrossLength = $this->angledLayout($long, $short, $this->boxLength);
+            if (($acrossWidth !== null && $this->angledLayouts[$acrossWidth]['itemLength'] <= $this->boxLength)
+                || ($acrossLength !== null && $this->angledLayouts[$acrossLength]['itemLength'] <= $this->boxWidth)) {
+                $fitting[$long . '|' . $short . '|' . $h] = [$long, $short, $h];
+            }
+        }
+
+        if (!$this->preferStableOrientations) {
+            return array_values($fitting);
+        }
+
+        $stable = [];
+        foreach ($fitting as [$long, $short, $h]) {
+            if ($h === $this->boxDepth || atan($short / $h) > self::STABILITY_ANGLE) {
+                $stable[] = [$long, $short, $h];
+            }
+        }
+
+        return $stable !== [] ? $stable : array_values($fitting);
+    }
+
+    /**
+     * Id of the layout of parallel $long × $short items turned just enough to span no more than $span, or null.
+     */
+    private function angledLayout(int $long, int $short, int $span): ?int
+    {
+        $key = $long . '|' . $short . '|' . $span;
+        if (!isset($this->angledLayoutIds[$key]) && !array_key_exists($key, $this->angledLayoutIds)) {
+            $layout = AngledGeometry::layout($long, $short, $span);
+            if ($layout === null) {
+                $this->angledLayoutIds[$key] = null;
+            } else {
+                $this->angledLayoutIds[$key] = count($this->angledLayouts);
+                $this->angledLayouts[] = [...$layout, 'long' => $long, 'short' => $short];
+            }
+        }
+
+        return $this->angledLayoutIds[$key];
+    }
+
+    /**
+     * Rectangles (relative to the block, as [x, y, width, length]) under the top of an angled block, and inscribed
+     * in the empty triangles in its corners.
+     *
+     * @param  array<int, int|float>                                                                                 $candidate
+     * @return array{0: list<array{0: int, 1: int, 2: int, 3: int}>, 1: list<array{0: int, 1: int, 2: int, 3: int}>}
+     */
+    private function angledShape(array $candidate): array
+    {
+        $direction = $candidate[self::C_DIR];
+        $count = $direction === 0 ? $candidate[self::C_NY] : $candidate[self::C_NX];
+        $key = $candidate[self::C_ANGLED] . '|' . $count . '|' . $direction;
+        if (!isset($this->angledShapes[$key])) {
+            $layout = $this->angledLayouts[$candidate[self::C_ANGLED]];
+            $rowLength = $layout['itemLength'] + ($count - 1) * $layout['pitch'];
+            $angle = rad2deg($layout['angle']);
+            $items = [];
+            for ($i = 0; $i < $count; ++$i) {
+                $items[] = AngledGeometry::corners(0, $i * $layout['pitch'], $layout['long'], $layout['short'], $angle);
+            }
+            $supports = AngledGeometry::supportRectangles($items, 0, $rowLength);
+            $corners = AngledGeometry::cornerRectangles(AngledGeometry::groupOutline($layout, $layout['long'], $layout['short'], $count), $layout['width'], $rowLength);
+            if ($direction === 1) {
+                // the layout is worked out spanning x; mirror it to span y
+                $mirror = static fn (array $rectangle): array => [$rectangle[1], $rectangle[0], $rectangle[3], $rectangle[2]];
+                $supports = array_map($mirror, $supports);
+                $corners = array_map($mirror, $corners);
+            }
+            $this->angledShapes[$key] = [$supports, $corners];
+        }
+
+        return $this->angledShapes[$key];
     }
 
     /**

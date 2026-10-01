@@ -42,12 +42,17 @@ class SupportCalculator
                 if ($other->z >= $item->z) {
                     continue; // only items reaching up from below can support it (not itself, nor flat items level with it)
                 }
-                $ix = min($item->x + $item->width, $other->x + $other->width) - max($item->x, $other->x);
+                $ix = min($item->x + $item->boundingWidth, $other->x + $other->boundingWidth) - max($item->x, $other->x);
                 if ($ix <= 0) {
                     continue;
                 }
-                $iy = min($item->y + $item->length, $other->y + $other->length) - max($item->y, $other->y);
-                if ($iy > 0) {
+                $iy = min($item->y + $item->boundingLength, $other->y + $other->boundingLength) - max($item->y, $other->y);
+                if ($iy <= 0) {
+                    continue;
+                }
+                if ($item->isAngled() || $other->isAngled()) {
+                    $supported += AngledGeometry::intersectionArea(AngledGeometry::footprint($item), AngledGeometry::footprint($other));
+                } else {
                     $supported += $ix * $iy;
                 }
             }

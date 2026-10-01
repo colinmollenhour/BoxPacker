@@ -26,6 +26,7 @@ BoxPacker is licensed under the `MIT license`_.
     sortation
     weight-distribution
     too-large-items
+    angled-placement
     positional-information
     limited-supply-boxes
     custom-constraints

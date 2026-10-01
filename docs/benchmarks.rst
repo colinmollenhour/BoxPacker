@@ -20,9 +20,14 @@ Datasets
 ``bookshop-3d``, ``bookshop-2d``
     4,288 real orders from an online bookshop with a choice of three carton sizes, with items allowed to rotate freely
     (3D) or only to lie flat (2D). Scored on the number of cartons and their total volume.
+``overlong``
+    100 synthetic e-commerce orders (generated from a fixed seed) with six carton sizes, in which some items are a little
+    too long for the cartons they would otherwise go in, for :doc:`angled placement<angled-placement>` (run with
+    ``--opt=angled=1``). One order in ten has an item too long for any carton unless it is angled.
 
 Groups are available too: ``ecommerce`` (Loh/Nee, BR1-4, Ivancic), ``container`` (BR5-7), ``extreme`` (BR8-15),
-``bookshop``, ``published`` (all of the literature sets) and ``all``. Ranges like ``br1-7`` work as well.
+``bookshop``, ``published`` (all of the literature sets), ``all`` (published and bookshop) and ``angled``
+(``overlong``). Ranges like ``br1-7`` work as well.
 
 Results
 -------
@@ -47,6 +52,18 @@ Bookshop (2D)          5,832 cartons      5,814 cartons, 9.4% less volume  0.011
 orders where ``Fast`` uses a smaller carton all rely on items resting on less than 10% of their base (``Fast`` does
 not check support); with ``setMinimumSupport(0)`` ``Thorough`` needs 4,547 and 5,814 cartons. The Ivancic volume lower
 bound (579 containers) is weak, as many of those items cannot share a container at all.
+
+With angled placement (``overlong``, 100 orders):
+
+==============================  ======================  ======================
+                                Fast                    Thorough
+==============================  ======================  ======================
+Items that cannot be packed     22 → 0                  22 → 0
+Carton volume (90 orders [#]_)  13.6% less              33.4% less (none more)
+Mean time per order             0.06s → 0.06s           0.51s → 0.70s
+==============================  ======================  ======================
+
+.. [#] The orders that can be packed completely with and without angled placement.
 
 Running
 -------

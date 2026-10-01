@@ -31,10 +31,10 @@ final class Strategies
     public static function describe(): array
     {
         return [
-            'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing)',
+            'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing; options: angled)',
             'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
-            'block' => 'Block-building beam search engine only (options: width, budget, support, time, rule, scoring)',
-            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack(), library defaults unless overridden (options: width, budget, support, time, balance)',
+            'block' => 'Block-building beam search engine only (options: width, budget, support, time, rule, scoring, angled)',
+            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack(), library defaults unless overridden (options: width, budget, support, time, balance, angled)',
         ];
     }
 
@@ -44,7 +44,7 @@ final class Strategies
     public static function single(string $strategy, Box $box, ItemList $items, array $options): PackedBox
     {
         return match ($strategy) {
-            'legacy' => (new VolumePacker($box, $items))->pack(),
+            'legacy' => self::legacySingle($box, $items, $options)->pack(),
             'legacy-subset' => (new VolumePacker($box, $items))->packBestSubset(),
             'block' => self::blockPacker($box, $items, $options)->pack(),
             'thorough' => self::thoroughSingle($box, $items, $options)->pack(),
@@ -59,7 +59,7 @@ final class Strategies
     public static function multi(string $strategy, array $boxes, ItemList $items, array $options): PackedBoxList
     {
         return match ($strategy) {
-            'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items),
+            'legacy', 'legacy-subset' => self::legacyMulti($boxes, $items, $options),
             'thorough' => self::thoroughMulti($boxes, $items, $options),
             default => throw new InvalidArgumentException("Unknown strategy {$strategy}"),
         };
@@ -85,6 +85,7 @@ final class Strategies
         if (isset($options['scoring'])) {
             $packer->setScoring((int) $options['scoring']);
         }
+        $packer->setAllowAngledPlacement((bool) ($options['angled'] ?? false));
 
         return $packer;
     }
@@ -108,6 +109,18 @@ final class Strategies
         if (isset($options['time'])) {
             $packer->setSearchTimeLimit((float) $options['time']);
         }
+        $packer->setAllowAngledPlacement((bool) ($options['angled'] ?? false));
+
+        return $packer;
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    private static function legacySingle(Box $box, ItemList $items, array $options): VolumePacker
+    {
+        $packer = new VolumePacker($box, $items);
+        $packer->setAllowAngledPlacement((bool) ($options['angled'] ?? false));
 
         return $packer;
     }
@@ -135,6 +148,7 @@ final class Strategies
             $packer->setSearchTimeLimit((float) $options['time']);
         }
         $packer->setMaxBoxesToBalanceWeight((int) ($options['balance'] ?? 0));
+        $packer->setAllowAngledPlacement((bool) ($options['angled'] ?? false));
 
         $packer->throwOnUnpackableItem(false);
         foreach ($boxes as $box) {
@@ -146,12 +160,14 @@ final class Strategies
     }
 
     /**
-     * @param list<Box> $boxes
+     * @param list<Box>             $boxes
+     * @param array<string, string> $options
      */
-    private static function legacyMulti(array $boxes, ItemList $items): PackedBoxList
+    private static function legacyMulti(array $boxes, ItemList $items, array $options): PackedBoxList
     {
         $packer = new Packer();
         $packer->setMaxBoxesToBalanceWeight(0);
+        $packer->setAllowAngledPlacement((bool) ($options['angled'] ?? false));
         $packer->throwOnUnpackableItem(false);
         foreach ($boxes as $box) {
             $packer->addBox($box);

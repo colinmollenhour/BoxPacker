@@ -427,7 +427,7 @@ class ThoroughPacker implements LoggerAwareInterface
     /**
      * An upper bound on the volume of the items that could be packed into the box: its volume, or the volume of the
      * items that fit within its weight capacity (lightest for their size first, the last one pro rata), whichever is
-     * less. Items too large for the box in any orientation are left out.
+     * less. Items too large for the box in any orientation (even at an angle, when allowed) are left out.
      *
      * @param list<Item> $items
      */
@@ -440,7 +440,8 @@ class ThoroughPacker implements LoggerAwareInterface
         foreach ($items as $item) {
             $edges = [$item->getWidth(), $item->getLength(), $item->getDepth()];
             sort($edges);
-            if ($edges[0] <= $boxEdges[0] && $edges[1] <= $boxEdges[1] && $edges[2] <= $boxEdges[2]) {
+            if (($edges[0] <= $boxEdges[0] && $edges[1] <= $boxEdges[1] && $edges[2] <= $boxEdges[2])
+                || ($this->volumePackerFactory->allowsAngledPlacement() && AngledGeometry::onlyFitsAngled($item, $box))) {
                 $volume = $edges[0] * $edges[1] * $edges[2];
                 $candidates[] = [$item->getWeight() / ($volume ?: 1), $volume, $item->getWeight()];
             }

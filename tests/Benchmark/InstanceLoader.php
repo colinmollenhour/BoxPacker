@@ -13,10 +13,14 @@ use DVDoug\BoxPacker\BookShopTest;
 use DVDoug\BoxPacker\ItemList;
 use DVDoug\BoxPacker\PublishedInstanceSupport;
 use DVDoug\BoxPacker\Rotation;
+use DVDoug\BoxPacker\Test\TestBox;
 use DVDoug\BoxPacker\Test\TestItem;
 use InvalidArgumentException;
+use Random\Engine\Mt19937;
+use Random\Randomizer;
 
 use function ceil;
+use function max;
 use function preg_match;
 use function range;
 use function str_starts_with;
@@ -42,6 +46,7 @@ final class InstanceLoader
         'container' => ['br5', 'br6', 'br7'],
         'extreme' => ['br8', 'br9', 'br10', 'br11', 'br12', 'br13', 'br14', 'br15'],
         'bookshop' => ['bookshop-3d', 'bookshop-2d'],
+        'angled' => ['overlong'],
         'published' => ['loh-nee', 'br1', 'br2', 'br3', 'br4', 'br5', 'br6', 'br7', 'br8', 'br9', 'br10', 'br11', 'br12', 'br13', 'br14', 'br15', 'ivancic'],
     ];
 
@@ -159,6 +164,46 @@ final class InstanceLoader
             return $instances;
         }
 
+        if ($dataset === 'overlong') {
+            return self::overlongInstances();
+        }
+
         throw new InvalidArgumentException("Unknown dataset {$dataset}");
+    }
+
+    /**
+     * Synthetic e-commerce orders (fixed seed, so always the same) in which some items are a little too long for
+     * the boxes they would otherwise go in: umbrellas, poster tubes, rods. Most still fit the largest box square;
+     * about one order in ten has an item too long for any box unless it is angled.
+     *
+     * @return list<array{dataset: string, id: string, kind: string, boxes: list<\DVDoug\BoxPacker\Box>, items: ItemList}>
+     */
+    private static function overlongInstances(): array
+    {
+        $boxes = [];
+        foreach ([[300, 200, 100, 150], [400, 300, 200, 250], [500, 400, 300, 400], [600, 400, 400, 550], [800, 600, 400, 800], [1200, 800, 600, 1500]] as [$width, $length, $depth, $emptyWeight]) {
+            $boxes[] = new TestBox("{$width}x{$length}x{$depth}", $width, $length, $depth, $emptyWeight, $width - 10, $length - 10, $depth - 10, 30000);
+        }
+
+        $random = new Randomizer(new Mt19937(20260930));
+        $instances = [];
+        for ($order = 1; $order <= 100; ++$order) {
+            $items = new ItemList();
+            for ($line = $random->getInt(1, 3); $line > 0; --$line) {
+                $target = $boxes[$random->getInt(0, 4)];
+                $long = (int) (max($target->getInnerWidth(), $target->getInnerLength()) * (1 + $random->getInt(3, 20) / 100));
+                if ($order % 10 === 0 && $line === 1) {
+                    $long = $random->getInt(1200, 1300); // longer than any box, square
+                }
+                $short = $random->getInt(20, 80);
+                $items->insert(new TestItem("Long {$line}", $long, $short, $random->getInt(20, 80), $random->getInt(200, 2000), Rotation::KeepFlat), $random->getInt(1, 3));
+            }
+            for ($line = $random->getInt(2, 10); $line > 0; --$line) {
+                $items->insert(new TestItem("Item {$line}", $random->getInt(20, 250), $random->getInt(20, 250), $random->getInt(10, 150), $random->getInt(50, 3000), $random->getInt(0, 1) === 1 ? Rotation::BestFit : Rotation::KeepFlat), $random->getInt(1, 4));
+            }
+            $instances[] = ['dataset' => 'overlong', 'id' => (string) $order, 'kind' => 'multi', 'boxes' => $boxes, 'items' => $items];
+        }
+
+        return $instances;
     }
 }
