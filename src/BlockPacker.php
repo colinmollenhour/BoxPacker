@@ -16,15 +16,19 @@ use Psr\Log\NullLogger;
 use function array_column;
 use function array_fill;
 use function array_key_exists;
+use function array_key_first;
 use function array_keys;
 use function array_map;
 use function array_slice;
+use function array_splice;
+use function array_sum;
 use function array_values;
 use function atan;
 use function count;
 use function hrtime;
 use function implode;
 use function intdiv;
+use function is_finite;
 use function ksort;
 use function max;
 use function min;
@@ -93,7 +97,21 @@ class BlockPacker implements LoggerAwareInterface
      */
     private const MAX_FILLABLE_TABLE = 50000;
 
-    private const FILLABLE_CACHE_SIZE = 64;
+    /**
+     * Fillable length tables kept between packings, in total table entries (a few MB at most).
+     */
+    private const FILLABLE_CACHE_ENTRIES = 250000;
+
+    /**
+     * Greedy completions kept for reuse by wider passes of the search, in total placements. Only reached without a
+     * search budget; beyond it, completions are recomputed when needed.
+     */
+    private const MAX_CACHED_COMPLETION_PLACEMENTS = 100000;
+
+    /**
+     * Time limits longer than this (about three years), or not finite, count as no limit.
+     */
+    private const MAX_TIME_LIMIT = 1e8;
 
     /**
      * Placement callbacks (ConstrainedPlacementItem) are charged to the search budget at this rate: often cheap
@@ -205,11 +223,16 @@ class BlockPacker implements LoggerAwareInterface
     private array $fillable = [[], [], []];
 
     /**
-     * Fillable length tables already built, by length and item edges (a Packer packs the same box and items many times).
+     * Fillable length tables already built, by length and item edges (a Packer packs the same box and items many times),
+     * oldest first.
      *
      * @var array<string, list<int>>
      */
     private static array $fillableCache = [];
+
+    private static int $fillableCacheEntries = 0;
+
+    private ?TimeoutChecker $timeoutChecker = null;
 
     private float $minSupport = 0.5;
 
@@ -241,11 +264,18 @@ class BlockPacker implements LoggerAwareInterface
     private int $callbacks = 0;
 
     /**
+     * Whether a placement callback refused a block during the last call to candidates().
+     */
+    private bool $refused = false;
+
+    /**
      * Greedy completions already computed during this search, by signature of the state they started from.
      *
      * @var array<string, BlockSearchState>
      */
     private array $completions = [];
+
+    private int $cachedCompletionPlacements = 0;
 
     /**
      * @param iterable<Item> $items
@@ -299,6 +329,7 @@ class BlockPacker implements LoggerAwareInterface
                 $this->minFootprintEdges[$type] = min($this->minFootprintEdges[$type], $w, $l);
             }
         }
+        $this->totalItems = array_sum($this->initialCounts); // only the items that can go in
     }
 
     public function setLogger(LoggerInterface $logger): void
@@ -307,7 +338,7 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Minimum fraction (0-1) of a block's base that must rest on the floor or on other items.
+     * Minimum fraction (0-1) of each item's base that must rest on the floor or on other items.
      */
     public function setMinimumSupport(float $minSupport): void
     {
@@ -323,22 +354,32 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Optional wall-clock limit (seconds) after which the best packing found so far is returned.
+     * Optional wall-clock limit (seconds) after which the best packing found so far is returned. The first greedy
+     * completion always runs to the end, so that there is a complete packing to return.
      */
     public function setTimeLimit(?float $timeLimit): void
     {
-        $this->timeLimit = $timeLimit;
+        $this->timeLimit = $timeLimit === null || !is_finite($timeLimit) || $timeLimit > self::MAX_TIME_LIMIT ? null : max(0.0, $timeLimit);
     }
 
     /**
      * Deterministic cap on search effort: the number of trial block placements (across all greedy completions)
      * after which no new work is started and the best packing found so far is returned. Work in progress is
-     * allowed to finish, but is cut short at twice the budget. Roughly proportional to run time.
+     * allowed to finish, but is cut short at twice the budget; the first greedy completion always runs to the end.
+     * null = no cap (only the beam width bounds the search).
      */
     public function setPlacementBudget(?int $placements): void
     {
         $this->placementBudget = $placements ?? PHP_INT_MAX;
-        $this->placementCap = $placements === null ? PHP_INT_MAX : 2 * $placements;
+        $this->placementCap = $placements === null || $placements > intdiv(PHP_INT_MAX, 2) ? PHP_INT_MAX : 2 * $placements;
+    }
+
+    /**
+     * Checked as the search goes, so that a Packer's timeout can interrupt a long search.
+     */
+    public function setTimeoutChecker(?TimeoutChecker $timeoutChecker): void
+    {
+        $this->timeoutChecker = $timeoutChecker;
     }
 
     /**
@@ -362,6 +403,7 @@ class BlockPacker implements LoggerAwareInterface
             }
             $this->angledUprights[$type] = $uprights;
             $this->initialCounts[$type] = count($this->itemsByType[$type]);
+            $this->totalItems += $this->initialCounts[$type];
             $this->packableVolume += $this->initialCounts[$type] * $this->volumes[$type];
             $this->minHeights[$type] = min(array_column($uprights, 2));
             $this->minFootprintEdges[$type] = min(array_column($uprights, 1));
@@ -391,9 +433,17 @@ class BlockPacker implements LoggerAwareInterface
         return $this->placements;
     }
 
-    public function getGreedyRuns(): int
+    /**
+     * Whether the last search stopped early, on its placement budget or time limit (a wider search was still to do).
+     */
+    public function wasCutShort(): bool
     {
-        return $this->greedyRuns;
+        return $this->budgetExhausted || $this->outOfTime;
+    }
+
+    public function ranOutOfTime(): bool
+    {
+        return $this->outOfTime;
     }
 
     public function pack(): PackedBox
@@ -401,10 +451,12 @@ class BlockPacker implements LoggerAwareInterface
         $this->buildFillableTables();
         $this->deadline = $this->timeLimit === null ? PHP_INT_MAX : hrtime(true) + (int) ($this->timeLimit * 1e9);
         $this->outOfTime = false;
+        $this->budgetExhausted = false;
         $this->greedyRuns = 0;
         $this->placements = 0;
         $this->callbacks = 0;
         $this->completions = [];
+        $this->cachedCompletionPlacements = 0;
 
         $root = new BlockSearchState();
         $root->spaces = [[0, 0, 0, $this->boxWidth, $this->boxLength, $this->boxDepth]];
@@ -416,7 +468,8 @@ class BlockPacker implements LoggerAwareInterface
         $rootCompleted = $this->greedy(clone $root, false);
         $best = $rootCompleted;
 
-        $this->budgetExhausted = false;
+        // the first completion is exempt from the limits, but no further search is started once they are reached
+        $this->limitReached();
         for ($width = 2; $width <= $this->maxBeamWidth && !$this->isComplete($best) && !$this->budgetExhausted && !$this->outOfTime; $width = $width < $this->maxBeamWidth && $width * 2 > $this->maxBeamWidth ? $this->maxBeamWidth : $width * 2) {
             $best = $this->beamSearch($root, $rootCompleted, $width, $best);
         }
@@ -425,6 +478,21 @@ class BlockPacker implements LoggerAwareInterface
         $this->completions = [];
 
         return $this->materialise($best);
+    }
+
+    /**
+     * Whether the placement budget or the time limit has been reached (recording which).
+     */
+    private function limitReached(): bool
+    {
+        if ($this->placements > $this->placementBudget) {
+            $this->budgetExhausted = true;
+        } elseif (hrtime(true) > $this->deadline) {
+            $this->outOfTime = true;
+        }
+        $this->timeoutChecker?->throwOnTimeout();
+
+        return $this->budgetExhausted || $this->outOfTime;
     }
 
     private function isComplete(BlockSearchState $state): bool
@@ -441,6 +509,9 @@ class BlockPacker implements LoggerAwareInterface
     {
         $beam = [[$root, $rootCompleted]];
         while ($beam !== []) {
+            if ($this->limitReached()) {
+                return $best; // expanding a level (and asking placement callbacks) is work too
+            }
             $children = [];
             $seen = [];
             foreach ($beam as [$state, $completed]) {
@@ -461,21 +532,17 @@ class BlockPacker implements LoggerAwareInterface
                         $childCompleted = $this->completions[$signature]; // already evaluated in a narrower pass
                     } else {
                         $childCompleted = $this->greedy(clone $child);
-                        $this->completions[$signature] = $childCompleted;
+                        if ($this->cachedCompletionPlacements < self::MAX_CACHED_COMPLETION_PLACEMENTS) {
+                            $this->completions[$signature] = $childCompleted;
+                            $this->cachedCompletionPlacements += count($childCompleted->placements);
+                        }
                         if ($childCompleted->volume > $best->volume) {
                             $best = $childCompleted;
                             if ($this->isComplete($best)) {
                                 return $best;
                             }
                         }
-                        if ($this->placements > $this->placementBudget) {
-                            $this->budgetExhausted = true;
-
-                            return $best;
-                        }
-                        if (hrtime(true) > $this->deadline) {
-                            $this->outOfTime = true;
-
+                        if ($this->limitReached()) {
                             return $best;
                         }
                     }
@@ -537,11 +604,22 @@ class BlockPacker implements LoggerAwareInterface
         while ($state->remaining > 0) {
             // stop part way through at the hard effort cap or when time runs out, keeping what has been placed; the
             // very first completion is exempt, so that there is always a complete answer (it is only one pass)
-            if ($withinLimits && ($this->placements > $this->placementCap || hrtime(true) > $this->deadline)) {
-                break;
+            if ($withinLimits) {
+                if ($this->placements > $this->placementCap) {
+                    $this->budgetExhausted = true;
+                    break;
+                }
+                if (hrtime(true) > $this->deadline) {
+                    $this->outOfTime = true;
+                    break;
+                }
             }
+            $this->timeoutChecker?->throwOnTimeout();
             $spaceIndex = $this->selectSpace($state);
             if ($spaceIndex === null) {
+                if ($this->reviveRefusedSpaces($state)) {
+                    continue;
+                }
                 break;
             }
             $candidates = $this->candidates($state, $state->spaces[$spaceIndex], 1);
@@ -560,17 +638,40 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Nothing can go into this space right now. A space on the floor never becomes usable again (it can only
-     * shrink and fewer items remain), but a raised one may once more supporting items are placed at its level,
-     * so it is kept as dormant: still part of the free space bookkeeping, but not selected.
+     * Nothing can go into this space right now. If placement callbacks refused what would fit, they may accept it
+     * once more has been packed, so the space is set aside (see {@see reviveRefusedSpaces()}). Otherwise, a space on
+     * the floor never becomes usable again (it can only shrink and fewer items remain), but a raised one may once more
+     * supporting items are placed at its level, so it is kept as dormant: still part of the free space bookkeeping,
+     * but not selected.
      */
     private function retire(BlockSearchState $state, int $spaceIndex): void
     {
-        if ($state->spaces[$spaceIndex][2] === 0) {
+        if ($this->refused) {
+            $state->spaces[$spaceIndex][7] = count($state->placements);
+        } elseif ($state->spaces[$spaceIndex][2] === 0) {
             unset($state->spaces[$spaceIndex]);
         } else {
             $state->spaces[$spaceIndex][6] = true;
         }
+    }
+
+    /**
+     * Once there is nothing else to fill, offer again the spaces that placement callbacks refused, if anything has been
+     * placed since (callbacks that depend on what is already packed may now accept). Only done then, as most callbacks
+     * give the same answer every time, and asking them again uses up the search budget.
+     */
+    private function reviveRefusedSpaces(BlockSearchState $state): bool
+    {
+        $placed = count($state->placements);
+        $revived = false;
+        foreach ($state->spaces as $index => $space) {
+            if (isset($space[7]) && $space[7] < $placed) {
+                unset($state->spaces[$index][7]);
+                $revived = true;
+            }
+        }
+
+        return $revived;
     }
 
     /**
@@ -588,8 +689,8 @@ class BlockPacker implements LoggerAwareInterface
             // bottom-up: lowest first, then nearest a corner
             foreach ($state->spaces as $index => $space) {
                 $z = $space[2];
-                if ($z > $bestA || isset($space[6])) {
-                    continue; // higher than the best so far, or dormant until new support appears
+                if ($z > $bestA || isset($space[6]) || isset($space[7])) {
+                    continue; // higher than the best so far, or set aside (see retire())
                 }
                 $dx = min($space[0], $boxWidth - $space[3]);
                 $dy = min($space[1], $boxLength - $space[4]);
@@ -612,8 +713,8 @@ class BlockPacker implements LoggerAwareInterface
 
         // nearest a corner of the container, by the distances to it sorted ascending
         foreach ($state->spaces as $index => $space) {
-            if (isset($space[6])) {
-                continue; // dormant until new support appears
+            if (isset($space[6]) || isset($space[7])) {
+                continue; // set aside (see retire())
             }
             $dx = min($space[0], $boxWidth - $space[3]);
             $dy = min($space[1], $boxLength - $space[4]);
@@ -648,11 +749,12 @@ class BlockPacker implements LoggerAwareInterface
     /**
      * Blocks that can go into the anchor corner of this space, best first.
      *
-     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int} $space
+     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int} $space
      * @return list<array<int, int|float>>
      */
     private function candidates(BlockSearchState $state, array $space, int $limit): array
     {
+        $this->refused = false;
         $lowX = $space[0] <= $this->boxWidth - $space[3];
         $lowY = $space[1] <= $this->boxLength - $space[4];
         $candidates = $this->candidatesAt($state, $space, $limit, $lowX, $lowY);
@@ -674,7 +776,7 @@ class BlockPacker implements LoggerAwareInterface
     /**
      * Blocks that can go into the given bottom corner of this space, best first.
      *
-     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int} $space
+     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int} $space
      * @return list<array<int, int|float>>
      */
     private function candidatesAt(BlockSearchState $state, array $space, int $limit, bool $lowX, bool $lowY): array
@@ -919,14 +1021,29 @@ class BlockPacker implements LoggerAwareInterface
 
         $chosen = [];
         $seen = [];
-        foreach ($candidates as $candidate) {
+        for ($i = 0; $i < count($candidates); ++$i) {
+            $candidate = $candidates[$i];
             $key = $candidate[self::C_TYPE] . ',' . $candidate[self::C_OW] . ',' . $candidate[self::C_OL] . ',' . $candidate[self::C_OH] . ',' . $candidate[self::C_NX] . ',' . $candidate[self::C_NY] . ',' . $candidate[self::C_NZ] . ',' . $candidate[self::C_X] . ',' . $candidate[self::C_Y] . (isset($candidate[self::C_ANGLED]) ? ',a' . $candidate[self::C_ANGLED] . ',' . $candidate[self::C_DIR] : '');
             if (isset($seen[$key])) {
                 continue;
             }
             $seen[$key] = true;
-            if ($this->constrained[$candidate[self::C_TYPE]] && !$this->constraintsAllow($state, $candidate)) {
-                continue;
+            if ($this->constrained[$candidate[self::C_TYPE]]) {
+                $accepted = $this->acceptedItems($state, $candidate);
+                if ($accepted < $candidate[self::C_NX] * $candidate[self::C_NY] * $candidate[self::C_NZ]) {
+                    $this->refused = true;
+                    if ($accepted > 0) {
+                        // try the part of the block that was accepted instead, in its place by score (it is asked
+                        // about again, as in a far corner of the space its items move)
+                        $smaller = $this->shrink($candidate, $accepted, $space, $lowX, $lowY);
+                        $at = $i + 1;
+                        while ($at < count($candidates) && $candidates[$at][self::C_SCORE] >= $smaller[self::C_SCORE]) {
+                            ++$at;
+                        }
+                        array_splice($candidates, $at, 0, [$smaller]);
+                    }
+                    continue;
+                }
             }
             $chosen[] = $candidate;
             if (count($chosen) >= $limit) {
@@ -935,6 +1052,49 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return $chosen;
+    }
+
+    /**
+     * The block of the first $count items of a block (in the order they are placed, see {@see itemsOf()}): as many
+     * whole layers, or else rows, as that makes, in the same corner of the space.
+     *
+     * @param  array<int, int|float>                                                    $candidate
+     * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int} $space
+     * @return array<int, int|float>
+     */
+    private function shrink(array $candidate, int $count, array $space, bool $lowX, bool $lowY): array
+    {
+        [$x1, $y1, $z1, $x2, $y2, $z2] = $space;
+        $type = $candidate[self::C_TYPE];
+        $ow = $candidate[self::C_OW];
+        $ol = $candidate[self::C_OL];
+        $oh = $candidate[self::C_OH];
+        $nx = $candidate[self::C_NX];
+        $ny = $candidate[self::C_NY];
+        if ($count >= $nx * $ny) {
+            $nz = intdiv($count, $nx * $ny);
+        } elseif ($count >= $nx) {
+            $ny = intdiv($count, $nx);
+            $nz = 1;
+        } else {
+            $nx = $count;
+            $ny = $nz = 1;
+        }
+
+        $w = $nx * $ow;
+        $l = $ny * $ol;
+        $h = $nz * $oh;
+        $blockVolume = $nx * $ny * $nz * $this->volumes[$type];
+        $score = $blockVolume;
+        if ($this->scoring === 1) {
+            [$fillX, $fillY, $fillZ] = $this->fillable;
+            $rx = $x2 - $x1 - $w;
+            $ry = $y2 - $y1 - $l;
+            $rz = $z2 - $z1 - $h;
+            $score -= ($rx - $fillX[$rx]) * $l * $h + ($ry - $fillY[$ry]) * $w * $h + ($rz - $fillZ[$rz]) * $w * $l;
+        }
+
+        return [$score, $blockVolume, $w, $l, $h, $type, $ow, $ol, $oh, $nx, $ny, $nz, $lowX ? $x1 : $x2 - $w, $lowY ? $y1 : $y2 - $l, $z1];
     }
 
     /**
@@ -1032,9 +1192,6 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function isSupported(BlockSearchState $state, int $x, int $y, int $z, int $itemWidth, int $itemLength, int $nx, int $ny): bool
     {
-        if ($z === 0 || $this->minSupport <= 0.0) {
-            return true;
-        }
         $tops = $state->tops[$z] ?? [];
         $blockArea = $nx * $itemWidth * $ny * $itemLength;
         $supported = self::supportedArea($tops, $x, $y, $x + $nx * $itemWidth, $y + $ny * $itemLength);
@@ -1096,29 +1253,40 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Ask each item's own placement callback, in the order the items would be placed.
+     * Ask each item's own placement callback, in the order the items would be placed: how many are accepted before
+     * the first refusal.
      *
      * @param array<int, int|float> $candidate
      */
-    private function constraintsAllow(BlockSearchState $state, array $candidate): bool
+    private function acceptedItems(BlockSearchState $state, array $candidate): int
     {
-        $context = clone $this->context($state);
+        $context = $this->context($state);
+        $copied = false;
         $next = [];
-        foreach ($this->itemsOf($candidate) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
+        $items = $this->itemsOf($candidate);
+        $last = count($items) - 1;
+        foreach ($items as $index => [$type, $x, $y, $z, $w, $l, $h, $angle]) {
             $next[$type] ??= $this->initialCounts[$type] - $state->counts[$type];
             $item = $this->itemsByType[$type][$next[$type]++];
             if ($item instanceof ConstrainedPlacementItem) {
                 if (++$this->callbacks % self::CALLBACKS_PER_PLACEMENT === 0) {
                     ++$this->placements; // callbacks can be costly, so they count against the search budget too
                 }
+                // a PackedBox for each call, as a PackedBox keeps what it has worked out about its items
                 if (!$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
-                    return false;
+                    return $index;
                 }
             }
-            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle));
+            if ($index < $last) {
+                if (!$copied) {
+                    $context = clone $context; // the state's own list must not change
+                    $copied = true;
+                }
+                $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle));
+            }
         }
 
-        return true;
+        return count($items);
     }
 
     /**
@@ -1223,7 +1391,7 @@ class BlockPacker implements LoggerAwareInterface
      * Remove a newly occupied cuboid from the free spaces, replacing each space it cuts with the (maximal) pieces
      * left over on each side, then dropping pieces that are too small or lie inside another space.
      *
-     * @return array<int, array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}>
+     * @return array<int, array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int}>
      */
     private function occupy(BlockSearchState $state, int $bx1, int $by1, int $bz1, int $bx2, int $by2, int $bz2): array
     {
@@ -1285,6 +1453,8 @@ class BlockPacker implements LoggerAwareInterface
         $minFootprintEdge = $state->minFootprintEdge;
         $minHeight = $state->minHeight;
         $minVolume = $state->minVolume;
+        // a piece is dropped for lying inside another space, but not inside one that cannot be selected now (a dormant
+        // or refused space was set aside for what fits its own corners, and the piece's corners differ)
         foreach ($pieces as $side => $sidePieces) {
             $pieceCount = count($sidePieces);
             for ($i = 0; $i < $pieceCount; ++$i) {
@@ -1292,16 +1462,17 @@ class BlockPacker implements LoggerAwareInterface
                 if ($x2 - $x1 < $minFootprintEdge || $y2 - $y1 < $minFootprintEdge || $z2 - $z1 < $minHeight || ($x2 - $x1) * ($y2 - $y1) * ($z2 - $z1) < $minVolume) {
                     continue;
                 }
+                $dormant = isset($sidePieces[$i][6]);
                 foreach ($flush[$side] as $other) {
-                    if ($other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2) {
+                    if (($dormant || (!isset($other[6]) && !isset($other[7]))) && $other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2) {
                         continue 2;
                     }
                 }
                 for ($j = 0; $j < $pieceCount; ++$j) {
                     $other = $sidePieces[$j];
-                    if ($j !== $i && $other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2
-                        && ($j > $i || $other[0] !== $x1 || $other[1] !== $y1 || $other[2] !== $z1 || $other[3] !== $x2 || $other[4] !== $y2 || $other[5] !== $z2)) {
-                        continue 2; // inside another piece (of identical pieces, only the last is kept)
+                    if ($j !== $i && ($dormant || !isset($other[6])) && $other[0] <= $x1 && $other[1] <= $y1 && $other[2] <= $z1 && $other[3] >= $x2 && $other[4] >= $y2 && $other[5] >= $z2
+                        && ($j > $i || ($dormant && !isset($other[6])) || $other[0] !== $x1 || $other[1] !== $y1 || $other[2] !== $z1 || $other[3] !== $x2 || $other[4] !== $y2 || $other[5] !== $z2)) {
+                        continue 2; // inside another piece (of identical pieces, one that is not dormant is kept, else the last)
                     }
                 }
                 $kept[] = $sidePieces[$i];
@@ -1365,8 +1536,9 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Distinct orientations of the item that fit the empty box, keeping only stable ones where there are any
-     * (same rule as the layer packer).
+     * Distinct orientations of the item that fit the empty box. As in the layer packer, stable orientations (and those
+     * as tall as the box) are preferred, and unstable ones are only used when no stable orientation that the item may
+     * be packed in (by its placement callback, if it has one) fits the empty box.
      *
      * @return list<array{0: int, 1: int, 2: int}>
      */
@@ -1394,13 +1566,18 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         $stable = [];
-        foreach ($fitting as $key => [$ow, $ol, $oh]) {
-            if ($oh === $this->boxDepth || atan(min($ow, $ol) / ($oh ?: 1)) > self::STABILITY_ANGLE) {
-                $stable[] = $fitting[$key];
+        $anyStable = false;
+        foreach ($fitting as [$ow, $ol, $oh]) {
+            $isStable = atan(min($ow, $ol) / ($oh ?: 1)) > self::STABILITY_ANGLE;
+            if ($isStable || $oh === $this->boxDepth) {
+                $stable[] = [$ow, $ol, $oh];
+            }
+            if ($isStable && !$anyStable) {
+                $anyStable = !$item instanceof ConstrainedPlacementItem || $item->canBePacked(new PackedBox($this->box, new PackedItemList()), 0, 0, 0, $ow, $ol, $oh);
             }
         }
 
-        return $stable !== [] ? $stable : array_values($fitting);
+        return $anyStable ? $stable : array_values($fitting);
     }
 
     /**
@@ -1538,10 +1715,13 @@ class BlockPacker implements LoggerAwareInterface
                 $table[$length] = $best;
             }
             $this->fillable[$axis] = $table;
-            if (count(self::$fillableCache) >= self::FILLABLE_CACHE_SIZE) {
-                self::$fillableCache = [];
+            while (self::$fillableCacheEntries + $limit + 1 > self::FILLABLE_CACHE_ENTRIES) {
+                $oldest = array_key_first(self::$fillableCache);
+                self::$fillableCacheEntries -= count(self::$fillableCache[$oldest]);
+                unset(self::$fillableCache[$oldest]);
             }
             self::$fillableCache[$cacheKey] = $table;
+            self::$fillableCacheEntries += $limit + 1;
         }
     }
 }

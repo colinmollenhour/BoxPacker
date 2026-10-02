@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace DVDoug\BoxPacker;
 
+use Closure;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -62,6 +63,15 @@ class VolumePacker implements LoggerAwareInterface
 
     private int $searchPlacements = 0;
 
+    private bool $searchRanOutOfTime = false;
+
+    private ?TimeoutChecker $timeoutChecker = null;
+
+    /**
+     * @var ?Closure(int, bool): void
+     */
+    private ?Closure $searchListener = null;
+
     public function __construct(protected Box $box, ItemList $items)
     {
         $this->items = clone $items;
@@ -96,8 +106,8 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
-     * Fast (original layer packer, the default) or Thorough (block-building search; for up to 40 items the fast
-     * packer is also tried and the denser result kept, support rules permitting).
+     * Fast (original layer packer, the default) or Thorough (block-building search; for up to 40 items, if the search
+     * leaves some out, the fast packer is also tried and the denser result kept, support rules permitting).
      */
     public function setStrategy(PackingStrategy $strategy): void
     {
@@ -115,7 +125,8 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: optional wall-clock limit in seconds, after which the best packing found so far is
-     * used. Note that results then depend on machine speed.
+     * used (one pass of the search always completes, so that there is a packing to use). Once the search has run out
+     * of time, the fast packer is not tried as well. Note that results then depend on machine speed.
      */
     public function setSearchTimeLimit(?float $seconds): void
     {
@@ -124,8 +135,10 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: a deterministic cap on search effort, as the number of trial block placements
-     * (default 10,000); the best packing found within it is used (a search step in progress may run on to twice the
-     * budget). Unlike a time limit, results do not depend on machine speed. null = no cap.
+     * (default 10,000); the best packing found within it is used. One pass of the search always completes, and a
+     * search step in progress may run on to twice the budget. Unlike a time limit, results do not depend on machine
+     * speed, but run time per placement grows with the number of different items, so it is not a time limit.
+     * null = no cap (only the beam width bounds the search).
      */
     public function setSearchBudget(?int $placements): void
     {
@@ -139,6 +152,29 @@ class VolumePacker implements LoggerAwareInterface
     public function setMinimumSupport(float $fraction): void
     {
         $this->minimumSupport = max(0.0, min(1.0, $fraction));
+    }
+
+    /**
+     * Checked during the Thorough strategy's search, so that a Packer's timeout can interrupt it.
+     *
+     * @internal
+     */
+    public function setTimeoutChecker(?TimeoutChecker $timeoutChecker): void
+    {
+        $this->timeoutChecker = $timeoutChecker;
+    }
+
+    /**
+     * Told the number of trial placements of each block search this packer makes, and whether it was cut short by its
+     * budget or time limit.
+     *
+     * @internal
+     *
+     * @param ?Closure(int, bool): void $listener
+     */
+    public function setSearchListener(?Closure $listener): void
+    {
+        $this->searchListener = $listener;
     }
 
     /**
@@ -211,8 +247,9 @@ class VolumePacker implements LoggerAwareInterface
         $blockPacker->setMaxBeamWidth(1);
         $blockPacker->setMinimumSupport($this->minimumSupport);
         $blockPacker->setAllowAngledPlacement(true);
+        $blockPacker->setTimeoutChecker($this->timeoutChecker);
         $angled = $blockPacker->pack();
-        $this->searchPlacements += $blockPacker->getPlacements();
+        $this->recordSearch($blockPacker);
 
         return self::denser($this->packFast(), $angled);
     }
@@ -220,19 +257,19 @@ class VolumePacker implements LoggerAwareInterface
     /**
      * Thorough strategy: the block search, and for all but very large item lists also the fast packer (keeping
      * the denser of the two, provided the fast packing is supported well enough) unless the search already packed
-     * everything.
+     * everything or ran out of time.
      *
      * @param callable(): PackedBox $fastPacker
      */
     private function packThoroughWithFallback(callable $fastPacker): PackedBox
     {
         $thorough = $this->packThorough();
-        if ($thorough->items->count() === $this->items->count() || $this->items->count() > self::FAST_COMPARISON_LIMIT) {
+        if ($thorough->items->count() === $this->items->count() || $this->items->count() > self::FAST_COMPARISON_LIMIT || $this->searchRanOutOfTime) {
             return $thorough;
         }
 
         $fast = $fastPacker();
-        if ($fast->getWeight() > $fast->box->getMaxWeight() || SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
+        if (SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
             return $thorough;
         }
 
@@ -247,8 +284,7 @@ class VolumePacker implements LoggerAwareInterface
         return $this->strategy === PackingStrategy::Thorough
             && !$this->singlePassMode
             && !$this->beStrictAboutItemOrdering
-            && !$this->packAcrossWidthOnly
-            && $this->items->count() > 0;
+            && !$this->packAcrossWidthOnly;
     }
 
     private function packThorough(): PackedBox
@@ -260,10 +296,20 @@ class VolumePacker implements LoggerAwareInterface
         $blockPacker->setPlacementBudget($this->searchBudget);
         $blockPacker->setMinimumSupport($this->minimumSupport);
         $blockPacker->setAllowAngledPlacement($this->allowAngledPlacement);
+        $blockPacker->setTimeoutChecker($this->timeoutChecker);
         $packedBox = $blockPacker->pack();
-        $this->searchPlacements += $blockPacker->getPlacements();
+        $this->recordSearch($blockPacker);
+        $this->searchRanOutOfTime = $blockPacker->ranOutOfTime();
 
         return $packedBox;
+    }
+
+    private function recordSearch(BlockPacker $blockPacker): void
+    {
+        $this->searchPlacements += $blockPacker->getPlacements();
+        if ($this->searchListener !== null) {
+            ($this->searchListener)($blockPacker->getPlacements(), $blockPacker->wasCutShort());
+        }
     }
 
     /**
@@ -341,9 +387,12 @@ class VolumePacker implements LoggerAwareInterface
      * Pack this box maximising used volume, even if that means leaving a large
      * item out so smaller ones can fill the space more densely.
      *
-     * pack() still places the largest item that fits first. This retries
-     * after dropping that item from the candidate list. Leftover items are
-     * those not in the returned box.
+     * With the Fast strategy, pack() still places the largest item that fits
+     * first; this retries after dropping that item from the candidate list.
+     * With the Thorough strategy, pack() also maximises used volume (the block
+     * search chooses which items to leave out), and the two differ only in the
+     * fast packing that may be kept instead. Leftover items are those not in
+     * the returned box.
      */
     public function packBestSubset(): PackedBox
     {
@@ -368,6 +417,8 @@ class VolumePacker implements LoggerAwareInterface
 
             $attempt = new self($this->box, $items);
             $attempt->setLogger($this->logger);
+            $attempt->timeoutChecker = $this->timeoutChecker;
+            $attempt->searchListener = $this->searchListener;
             $attempt->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
             $attempt->setAllowAngledPlacement($this->allowAngledPlacement);
             $attempt->setMinimumSupport($this->minimumSupport);

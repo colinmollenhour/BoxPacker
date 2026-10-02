@@ -145,4 +145,22 @@ class ItemListTest extends TestCase
         self::assertEquals($item1, $itemList->extract());
         self::assertCount(0, $itemList);
     }
+
+    public function testWithItemsKeepsTheSorter(): void
+    {
+        $smallestFirst = new class implements ItemSorter {
+            public function compare(Item $itemA, Item $itemB): int
+            {
+                return $itemA->getWidth() <=> $itemB->getWidth();
+            }
+        };
+        $big = new TestItem('Big', 10, 10, 10, 10, Rotation::BestFit);
+        $small = new TestItem('Small', 1, 1, 1, 1, Rotation::BestFit);
+        $list = new ItemList($smallestFirst);
+
+        $subset = $list->withItems([$big, $small]);
+
+        self::assertSame([$small, $big], iterator_to_array($subset, false));
+        self::assertSame([$big, $small], iterator_to_array(ItemList::fromArray([$small, $big]), false));
+    }
 }

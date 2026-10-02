@@ -21,6 +21,7 @@ class SupportCalculator
 {
     /**
      * Smallest fraction (0-1) of any item's base that rests on the floor of the box or on the top of another item.
+     * Items with no base (zero width or length) are not counted.
      *
      * @param iterable<PackedItem> $items
      */
@@ -30,7 +31,7 @@ class SupportCalculator
         $raised = [];
         foreach ($items as $item) {
             $byTop[$item->z + $item->depth][] = $item;
-            if ($item->z > 0) {
+            if ($item->z > 0 && $item->width * $item->length > 0) {
                 $raised[] = $item;
             }
         }
@@ -56,7 +57,7 @@ class SupportCalculator
                     $supported += $ix * $iy;
                 }
             }
-            $minimum = min($minimum, $supported / (($item->width * $item->length) ?: 1));
+            $minimum = min($minimum, $supported / ($item->width * $item->length));
             if ($minimum === 0.0) {
                 break;
             }

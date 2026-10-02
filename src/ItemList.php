@@ -59,7 +59,26 @@ class ItemList implements Countable, IteratorAggregate
      */
     public static function fromArray(array $items, bool $preSorted = false): self
     {
-        $list = new self();
+        return self::build(new self(), $items, $preSorted);
+    }
+
+    /**
+     * A new list of the given items, sorted the same way as this one.
+     *
+     * @internal
+     *
+     * @param Item[] $items
+     */
+    public function withItems(array $items): self
+    {
+        return self::build(new self($this->sorter), $items, false);
+    }
+
+    /**
+     * @param Item[] $items
+     */
+    private static function build(self $list, array $items, bool $preSorted): self
+    {
         $list->list = $preSorted ? array_reverse($items) : $items;  // internal sort is largest at the end
         $list->isSorted = $preSorted;
 

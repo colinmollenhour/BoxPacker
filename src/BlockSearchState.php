@@ -19,9 +19,11 @@ namespace DVDoug\BoxPacker;
 final class BlockSearchState
 {
     /**
-     * Maximal free spaces as [x1, y1, z1, x2, y2, z2].
+     * Maximal free spaces as [x1, y1, z1, x2, y2, z2], with index 6 set on a dormant space (nothing can be placed in
+     * it until new support appears at its level) and index 7 on one where placement callbacks refused what would fit
+     * (the number of blocks placed when they did).
      *
-     * @var array<int, array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}>
+     * @var array<int, array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int}>
      */
     public array $spaces = [];
 

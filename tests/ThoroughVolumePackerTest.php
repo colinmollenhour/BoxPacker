@@ -22,6 +22,9 @@ use PHPUnit\Framework\TestCase;
 use function array_slice;
 use function iterator_to_array;
 
+use const INF;
+use const PHP_INT_MAX;
+
 #[CoversClass(BlockPacker::class)]
 #[CoversClass(VolumePacker::class)]
 class ThoroughVolumePackerTest extends TestCase
@@ -133,6 +136,137 @@ class ThoroughVolumePackerTest extends TestCase
         }
     }
 
+    public function testThePartOfARefusedBlockThatIsAllowedIsPacked(): void
+    {
+        // with more than 40 items the fast packer is not tried as well, so the search alone must find the 3 boxes that
+        // may go on the floor, though the column of 3 x 1 x 10 it would rather place is refused from the 4th box up
+        $box = new TestBox('Box', 30, 10, 100, 0, 30, 10, 100, 100000);
+        $items = new ItemList();
+        $items->insert(new ConstrainedPlacementNoStackingTestItem('Egg box', 10, 10, 10, 10, Rotation::BestFit), 41);
+
+        $packedBox = self::thorough($box, $items);
+
+        self::assertCount(3, $packedBox->items);
+        foreach ($packedBox->items as $packedItem) {
+            self::assertSame(0, $packedItem->z);
+        }
+    }
+
+    public function testAnUnstableOrientationIsUsedWhenTheCallbackAllowsNoStableOne(): void
+    {
+        // the rods may only stand upright, which is unstable; more than 40, so there is no fast packing to fall back on
+        $rod = new class('Rod', 1, 1, 10, 1, Rotation::BestFit) extends TestItem implements ConstrainedPlacementItem {
+            public function canBePacked(PackedBox $packedBox, int $proposedX, int $proposedY, int $proposedZ, int $width, int $length, int $depth): bool
+            {
+                return $depth === 10;
+            }
+        };
+        $box = new TestBox('Box', 10, 10, 20, 0, 10, 10, 20, 100000);
+        $items = new ItemList();
+        $items->insert($rod, 41);
+
+        $packedBox = self::thorough($box, $items);
+
+        self::assertCount(41, $packedBox->items);
+        self::assertValid($packedBox);
+    }
+
+    public function testAnItemWithNoStableOrientationMayLieUnstably(): void
+    {
+        // no way up of the planks is stable, so lying on edge in the gap above the slab is allowed (as in the fast
+        // packer), not only standing as tall as the box (which leaves no room for the slab)
+        $box = new TestBox('Box', 30, 100, 100, 0, 30, 100, 100, 100000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Slab', 30, 100, 60, 1, Rotation::Never));
+        $items->insert(new TestItem('Plank', 10, 40, 100, 1, Rotation::BestFit), 3);
+
+        $packedBox = (new BlockPacker($box, $items))->pack();
+
+        self::assertCount(4, $packedBox->items);
+        self::assertValid($packedBox);
+    }
+
+    public function testASpaceRefusedByACallbackIsTriedAgainOnceMoreIsPacked(): void
+    {
+        // the fragile items may only be packed once the cushion is in the box; a greedy pass still uses the space next
+        // to where it first tried them
+        $fragile = new class('Fragile', 12, 10, 3, 1, Rotation::BestFit) extends TestItem implements ConstrainedPlacementItem {
+            public function canBePacked(PackedBox $packedBox, int $proposedX, int $proposedY, int $proposedZ, int $width, int $length, int $depth): bool
+            {
+                foreach ($packedBox->items as $packedItem) {
+                    if ($packedItem->item->getDescription() === 'Cushion') {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        };
+        $box = new TestBox('Box', 10, 19, 16, 0, 10, 19, 16, 100000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Cushion', 13, 7, 11, 1, Rotation::BestFit));
+        $items->insert($fragile, 6);
+
+        $blockPacker = new BlockPacker($box, $items);
+        $blockPacker->setMaxBeamWidth(1);
+        $packedBox = $blockPacker->pack();
+
+        self::assertCount(5, $packedBox->items); // 3 if the space is given up
+        self::assertSame([], PackingValidator::problems($packedBox));
+    }
+
+    public function testADenserFastPackingIsNotKeptIfItIsNotSupportedWellEnough(): void
+    {
+        $box = new TestBox('Box', 18, 10, 15, 0, 18, 10, 15, 100000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Stick', 12, 2, 2, 1, Rotation::BestFit), 6);
+        $items->insert(new TestItem('Block', 8, 13, 7, 1, Rotation::BestFit), 6);
+        $items->insert(new TestItem('Crate', 11, 12, 10, 1, Rotation::BestFit));
+
+        $fast = (new VolumePacker($box, $items))->pack();
+        $packedBox = self::thorough($box, $items, 16);
+
+        self::assertGreaterThan($packedBox->getUsedVolume(), $fast->getUsedVolume());
+        self::assertLessThan(1.0, SupportCalculator::minimumSupport($fast->items));
+        self::assertValid($packedBox);
+    }
+
+    public function testPackingAcrossWidthOnlyUsesTheFastPacker(): void
+    {
+        $instance = InstanceLoader::load('br1')[0];
+        $fast = new VolumePacker($instance['box'], $instance['items']);
+        $fast->packAcrossWidthOnly();
+        $thorough = new VolumePacker($instance['box'], $instance['items']);
+        $thorough->setStrategy(PackingStrategy::Thorough);
+        $thorough->packAcrossWidthOnly();
+
+        self::assertEquals(self::describe($fast->pack()), self::describe($thorough->pack()));
+    }
+
+    public function testTheLargestSearchBudgetMeansNoCap(): void
+    {
+        $box = new TestBox('Box', 20, 20, 20, 0, 20, 20, 20, 10000);
+        $items = new ItemList();
+        $items->insert(new TestItem('Cube', 10, 10, 10, 100, Rotation::BestFit), 8);
+        $packer = new VolumePacker($box, $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setSearchBudget(PHP_INT_MAX);
+
+        self::assertCount(8, $packer->pack()->items);
+    }
+
+    public function testAnInfiniteTimeLimitMeansNoLimit(): void
+    {
+        $instance = InstanceLoader::load('br4')[0];
+        $unlimited = new VolumePacker($instance['box'], $instance['items']);
+        $unlimited->setStrategy(PackingStrategy::Thorough);
+        $infinite = new VolumePacker($instance['box'], $instance['items']);
+        $infinite->setStrategy(PackingStrategy::Thorough);
+        $infinite->setSearchTimeLimit(INF);
+
+        self::assertEquals(self::describe($unlimited->pack()), self::describe($infinite->pack()));
+    }
+
     public function testNeverWorseThanFastAndDeterministic(): void
     {
         foreach (array_slice(InstanceLoader::load('br1'), 0, 2) as $instance) {
@@ -182,6 +316,14 @@ class ThoroughVolumePackerTest extends TestCase
 
         self::assertSame(0.0, SupportCalculator::minimumSupport($packedItems));
         self::assertSame(0.0, PackingValidator::minimumSupport(new PackedBox($box, $packedItems)));
+    }
+
+    public function testAnItemWithNoBaseIsNotCountedAsUnsupported(): void
+    {
+        $packedItems = new PackedItemList();
+        $packedItems->insert(new PackedItem(new TestItem('Divider', 0, 10, 10, 1, Rotation::BestFit), 0, 0, 50, 0, 10, 10));
+
+        self::assertSame(1.0, SupportCalculator::minimumSupport($packedItems));
     }
 
     public function testSearchBudgetBoundsEachGreedyCompletion(): void
@@ -234,7 +376,9 @@ class ThoroughVolumePackerTest extends TestCase
         $packer->setSearchBudget(2000);
         $packedBox = $packer->pack();
 
-        self::assertLessThan(30000, $counting::$calls); // unbounded, this is over 400,000
+        // every tenth callback is charged as a trial placement; the others are at most one call per item, asking
+        // whether it may be packed in a stable orientation at all (unbounded, there are over 400,000 calls)
+        self::assertLessThanOrEqual(10 * $packer->getSearchPlacements() + 9 + 40, $counting::$calls);
         self::assertCount(8, $packedBox->items);
     }
 

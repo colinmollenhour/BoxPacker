@@ -12,6 +12,7 @@ namespace DVDoug\BoxPacker;
 use DVDoug\BoxPacker\Benchmark\InstanceLoader;
 use DVDoug\BoxPacker\Benchmark\PackingValidator;
 use DVDoug\BoxPacker\Exception\NoBoxesAvailableException;
+use DVDoug\BoxPacker\Exception\TimeoutException;
 use DVDoug\BoxPacker\Test\LimitedSupplyTestBox;
 use DVDoug\BoxPacker\Test\LinkedTestItem;
 use DVDoug\BoxPacker\Test\TestBox;
@@ -19,12 +20,19 @@ use DVDoug\BoxPacker\Test\TestItem;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
+use ReflectionMethod;
 use Stringable;
 
 use function array_count_values;
 use function array_slice;
+use function array_unique;
+use function count;
 use function iterator_to_array;
 use function sort;
+use function spl_object_id;
+use function usort;
+
+use const INF;
 
 #[CoversClass(Packer::class)]
 #[CoversClass(ThoroughPacker::class)]
@@ -62,6 +70,62 @@ class ThoroughPackerTest extends TestCase
             self::assertSame([], PackingValidator::problems($packedBox));
             self::assertGreaterThanOrEqual($support, PackingValidator::minimumSupport($packedBox));
         }
+    }
+
+    /**
+     * A logger that keeps the messages logged.
+     */
+    private static function recordingLogger(): AbstractLogger
+    {
+        return new class extends AbstractLogger {
+            /**
+             * @var list<string>
+             */
+            public array $messages = [];
+
+            public function log($level, string|Stringable $message, array $context = []): void
+            {
+                $this->messages[] = (string) $message;
+            }
+        };
+    }
+
+    /**
+     * A timeout checker that times out on the given call.
+     */
+    private static function timeoutOnCall(int $call): TimeoutChecker
+    {
+        return new class($call) implements TimeoutChecker {
+            public int $calls = 0;
+
+            public function __construct(private readonly float $timeout)
+            {
+            }
+
+            public function start(?float $startTime = null): void
+            {
+            }
+
+            public function throwOnTimeout(?float $currentTime = null, string $message = 'Exceeded the timeout'): void
+            {
+                if (++$this->calls >= $this->timeout) {
+                    throw new TimeoutException($message, $this->calls, $this->timeout);
+                }
+            }
+        };
+    }
+
+    /**
+     * Total inner volume of the boxes.
+     */
+    private static function boxVolume(PackedBoxList $packedBoxes): int
+    {
+        $volume = 0;
+        foreach ($packedBoxes as $packedBox) {
+            $volume += $packedBox->getInnerVolume();
+        }
+
+        return $volume;
     }
 
     private static function itemCount(PackedBoxList $packedBoxes): int
@@ -305,16 +369,25 @@ class ThoroughPackerTest extends TestCase
         self::assertEquals(self::describe($fast->pack()), self::describe($thorough->pack()));
     }
 
-    public function testNeverMoreBoxesThanFastAndDeterministic(): void
+    public function testTheSearchAloneNeedsNoMoreBoxesThanFastAndIsDeterministic(): void
     {
-        foreach (['2', '37'] as $id) {
-            $instance = InstanceLoader::load('ivancic')[(int) $id - 1];
-            $fast = Benchmark\Strategies::multi('legacy', $instance['boxes'], $instance['items'], []);
-            $thoroughA = Benchmark\Strategies::multi('thorough', $instance['boxes'], $instance['items'], ['width' => '4', 'support' => '0']);
-            $thoroughB = Benchmark\Strategies::multi('thorough', $instance['boxes'], $instance['items'], ['width' => '4', 'support' => '0']);
+        // orders of over 200 items, for which the fast packer is not run as well, so this measures the search itself
+        foreach (['2' => 3, '18' => 5] as $id => $copies) {
+            $instance = InstanceLoader::load('ivancic')[$id - 1];
+            $items = new ItemList();
+            for ($copy = 0; $copy < $copies; ++$copy) {
+                foreach ($instance['items'] as $item) {
+                    $items->insert($item);
+                }
+            }
+            self::assertGreaterThan(200, $items->count());
+
+            $fast = Benchmark\Strategies::multi('legacy', $instance['boxes'], $items, []);
+            $thoroughA = Benchmark\Strategies::multi('thorough', $instance['boxes'], $items, ['width' => '4', 'support' => '0']);
+            $thoroughB = Benchmark\Strategies::multi('thorough', $instance['boxes'], $items, ['width' => '4', 'support' => '0']);
 
             self::assertLessThanOrEqual($fast->count(), $thoroughA->count());
-            self::assertSame($instance['items']->count(), self::itemCount($thoroughA));
+            self::assertSame($items->count(), self::itemCount($thoroughA));
             self::assertEquals(self::describe($thoroughA), self::describe($thoroughB));
             self::assertValid($thoroughA, 0.0);
         }
@@ -330,6 +403,223 @@ class ThoroughPackerTest extends TestCase
         self::assertLessThanOrEqual($fast->count(), $thorough->count());
         self::assertSame($instance['items']->count(), self::itemCount($thorough));
         self::assertValid($thorough, 0.5);
+    }
+
+    public function testTheFastPackingIsNotKeptIfItIsNotSupportedWellEnough(): void
+    {
+        // the fast packer fits everything into one box, but with items overhanging
+        $boxes = [new TestBox('Small', 10, 10, 16, 0, 10, 10, 16, 100000), new TestBox('Large', 16, 10, 16, 0, 16, 10, 16, 100000)];
+        $fast = new Packer();
+        $thorough = new Packer();
+        $thorough->setStrategy(PackingStrategy::Thorough);
+        foreach ([$fast, $thorough] as $packer) {
+            $packer->setMinimumSupport(1.0);
+            $packer->setMaxBoxesToBalanceWeight(0);
+            foreach ($boxes as $box) {
+                $packer->addBox($box);
+            }
+            $packer->addItem(new TestItem('A', 3, 10, 8, 1, Rotation::BestFit), 4);
+            $packer->addItem(new TestItem('B', 6, 5, 6, 1, Rotation::BestFit), 5);
+            $packer->addItem(new TestItem('C', 6, 2, 8, 1, Rotation::BestFit), 4);
+        }
+
+        $fastBoxes = $fast->pack();
+        $thoroughBoxes = $thorough->pack();
+
+        self::assertCount(1, $fastBoxes);
+        self::assertLessThan(1.0, PackingValidator::minimumSupport($fastBoxes->top()));
+        self::assertCount(2, $thoroughBoxes);
+        self::assertSame(13, self::itemCount($thoroughBoxes));
+        self::assertValid($thoroughBoxes);
+    }
+
+    public function testAnUnusableBoxTypeDoesNotStopTheFastPackingBeingKept(): void
+    {
+        // Ivancic #5, where the fast packer's boxes are kept, with a box type that cannot hold anything at all
+        $instance = InstanceLoader::load('ivancic')[4];
+        $boxes = [...$instance['boxes'], new TestBox('Unusable', 100, 100, 100, 10, 100, 100, 100, 5)];
+
+        $thorough = Benchmark\Strategies::multi('thorough', $boxes, $instance['items'], []);
+        $withoutUnusable = Benchmark\Strategies::multi('thorough', $instance['boxes'], $instance['items'], []);
+
+        self::assertEquals(self::describe($withoutUnusable), self::describe($thorough));
+    }
+
+    public function testTheItemsAndBoxesGivenToTheConstructorAreUsed(): void
+    {
+        // Ivancic #5 again: whichever packing is kept, the list of items given is the one left with what is unpacked
+        $instance = InstanceLoader::load('ivancic')[4];
+        $boxes = new BoxList();
+        foreach ($instance['boxes'] as $box) {
+            $boxes->insert($box);
+        }
+        $items = clone $instance['items'];
+        $packer = new Packer($items, $boxes);
+        $packer->setStrategy(PackingStrategy::Thorough);
+
+        $packedBoxes = $packer->pack();
+
+        self::assertSame($instance['items']->count(), self::itemCount($packedBoxes));
+        self::assertSame($items, $packer->getUnpackedItems());
+        self::assertCount(0, $items);
+    }
+
+    public function testATimeoutPartWayThroughLeavesTheItemsToPack(): void
+    {
+        $instance = InstanceLoader::load('ivancic')[1];
+        $packer = self::thoroughPacker();
+        $packer->setTimeoutChecker(self::timeoutOnCall(200));
+        foreach ($instance['boxes'] as $box) {
+            $packer->addBox($box);
+        }
+        $packer->setItems($instance['items']);
+
+        try {
+            $packer->pack();
+            self::fail('Expected a timeout');
+        } catch (TimeoutException) {
+            self::assertSame($instance['items']->count(), $packer->getUnpackedItems()->count());
+        }
+    }
+
+    public function testTheTimeoutCheckerIsAskedDuringTheSearch(): void
+    {
+        // everything fits in one box, so only a few box packings are needed, but each search places many blocks
+        $packer = self::thoroughPacker();
+        $packer->setTimeoutChecker(self::timeoutOnCall(10));
+        $packer->addBox(new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 100000));
+        for ($i = 1; $i <= 6; ++$i) {
+            $packer->addItem(new TestItem("Item {$i}", 3 * $i + 1, 5 * $i + 2, 7 * $i + 3, 1, Rotation::BestFit), 5);
+        }
+
+        $this->expectException(TimeoutException::class);
+        $packer->pack();
+    }
+
+    public function testAnInfiniteTimeLimitMeansNoLimit(): void
+    {
+        $instance = InstanceLoader::load('ivancic')[2];
+        $unlimited = Benchmark\Strategies::multi('thorough', $instance['boxes'], $instance['items'], ['width' => '4']);
+
+        $infinite = self::thoroughPacker();
+        $infinite->setMinimumSupport(0.5);
+        $infinite->setSearchTimeLimit(INF);
+        $infinite->setMaxBoxesToBalanceWeight(0);
+        foreach ($instance['boxes'] as $box) {
+            $infinite->addBox($box);
+        }
+        $infinite->setItems($instance['items']);
+
+        self::assertEquals(self::describe($unlimited), self::describe($infinite->pack()));
+    }
+
+    public function testBoxesWithNoVolumeCanBeUsed(): void
+    {
+        $packer = self::thoroughPacker();
+        $packer->addBox(new TestBox('Envelope', 10, 10, 0, 0, 10, 10, 0, 1000));
+        $packer->addItem(new TestItem('Card', 10, 10, 0, 1, Rotation::KeepFlat), 2);
+
+        self::assertSame(2, self::itemCount($packer->pack()));
+    }
+
+    public function testEachPackedBoxIsADistinctObject(): void
+    {
+        // identical items packed the same way into boxes of the same type must still be separate boxes
+        $packer = new Packer();
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setMaxBoxesToBalanceWeight(0);
+        $packer->addBox(new TestBox('Box A', 11, 11, 11, 0, 11, 11, 11, 22));
+        $packer->addBox(new TestBox('Box B', 14, 14, 14, 0, 14, 14, 14, 7));
+        $packer->addItem(new TestItem('Item A', 5, 4, 9, 3, Rotation::BestFit), 4);
+        $packer->addItem(new TestItem('Item B', 3, 5, 5, 8, Rotation::BestFit), 6);
+
+        $ids = [];
+        foreach ($packer->pack() as $packedBox) {
+            $ids[] = spl_object_id($packedBox);
+        }
+
+        self::assertCount(count($ids), array_unique($ids));
+    }
+
+    public function testItemsLeftOverArePackedIntoBoxesFreedUpByTheImprovements(): void
+    {
+        // construction runs out of the limited boxes; improvement frees one up, and the item left over goes into it
+        // (the fast packer leaves it unpacked)
+        $logger = self::recordingLogger();
+        $packer = new Packer();
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $packer->setLogger($logger);
+        $packer->setMaxBoxesToBalanceWeight(0);
+        $packer->throwOnUnpackableItem(false);
+        $packer->addBox(new LimitedSupplyTestBox('Limited', 14, 16, 20, 0, 14, 16, 20, 32, 2));
+        $packer->addBox(new TestBox('Light', 16, 19, 16, 0, 16, 19, 16, 11));
+        $packer->addBox(new TestBox('Slim', 5, 16, 16, 0, 5, 16, 16, 50));
+        $packer->addItem(new TestItem('A', 7, 9, 10, 18, Rotation::BestFit), 2);
+        $packer->addItem(new TestItem('B', 8, 3, 13, 11, Rotation::BestFit), 5);
+        $packer->addItem(new TestItem('C', 4, 11, 15, 20, Rotation::BestFit), 1);
+
+        $packedBoxes = $packer->pack();
+
+        self::assertContains('Packing 1 items left over into boxes freed up by the improvements', $logger->messages);
+        self::assertSame(8, self::itemCount($packedBoxes));
+        self::assertCount(0, $packer->getUnpackedItems());
+        self::assertValid($packedBoxes, 0.5);
+    }
+
+    public function testWeightBalancingIsNotKeptIfItNeedsLargerBoxes(): void
+    {
+        // balancing the weight would put the items into two of the large boxes
+        $unbalanced = new Packer();
+        $unbalanced->setMaxBoxesToBalanceWeight(0);
+        $balanced = new Packer();
+        foreach ([$unbalanced, $balanced] as $packer) {
+            $packer->setStrategy(PackingStrategy::Thorough);
+            $packer->addBox(new TestBox('Small', 8, 8, 8, 0, 8, 8, 8, 36));
+            $packer->addBox(new TestBox('Large', 19, 19, 19, 0, 19, 19, 19, 40));
+            $packer->addItem(new TestItem('Heavy', 5, 7, 6, 20, Rotation::BestFit), 2);
+            $packer->addItem(new TestItem('Light', 5, 5, 5, 7, Rotation::BestFit), 2);
+        }
+
+        $unbalancedBoxes = $unbalanced->pack();
+        $balancedBoxes = $balanced->pack();
+
+        self::assertSame(['Large', 'Small'], self::boxReferences($unbalancedBoxes));
+        self::assertSame(self::boxVolume($unbalancedBoxes), self::boxVolume($balancedBoxes));
+        self::assertCount(2, $balancedBoxes);
+    }
+
+    public function testPairsAreMadeInOrderOfTheirSum(): void
+    {
+        $pairsBySum = new ReflectionMethod(ThoroughPacker::class, 'pairsBySum');
+        $seed = 1;
+        $random = static function (int $max) use (&$seed): int { // repeatable
+            $seed = ($seed * 1103515245 + 12345) % 2147483648;
+
+            return ($seed >> 16) % ($max + 1);
+        };
+        for ($round = 0; $round < 50; ++$round) {
+            $values = [];
+            for ($i = $random(12); $i > 0; --$i) {
+                $values[] = $round % 2 === 0 ? $random(5) : -$random(50) / 7;
+            }
+            $maxSum = $round % 3 === 0 ? 6 : INF;
+
+            $expected = [];
+            foreach ($values as $i => $a) {
+                foreach ($values as $j => $b) {
+                    if ($i < $j && $a + $b <= $maxSum) {
+                        $expected[] = [$a + $b, $i, $j];
+                    }
+                }
+            }
+            usort($expected, static fn (array $x, array $y) => $x <=> $y);
+            $actual = [];
+            foreach ($pairsBySum->invoke(null, $values, $maxSum) as [$i, $j]) {
+                $actual[] = [$values[$i] + $values[$j], $i, $j];
+            }
+
+            self::assertSame($expected, $actual);
+        }
     }
 
     public function testWeightBalancingDoesNotAddBoxes(): void
