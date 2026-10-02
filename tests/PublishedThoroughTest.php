@@ -24,10 +24,11 @@ use const FILE_IGNORE_NEW_LINES;
 use const FILE_SKIP_EMPTY_LINES;
 
 /**
- * Regression baseline for PackingStrategy::Thorough (default settings) on the published sets: Loh/Nee and BR1-15
- * (single container, utilisation) and Ivancic (containers needed). The search is deterministic, so every instance
- * must reproduce its recorded result and pass the independent validity checks. Excluded from the default run (it
- * takes a while); run with --group efficiency-thorough.
+ * Regression baseline for PackingStrategy::Thorough on the published sets: Loh/Nee and BR1-15 (single container,
+ * utilisation, library defaults) and Ivancic (containers needed, library defaults except weight balancing, which is
+ * off). The search is deterministic, so every instance must reproduce its recorded result and pass the independent
+ * validity checks. Every run writes its results to published-lastrun-thorough.csv and ivancic-lastrun-thorough.csv
+ * (gitignored). Excluded from the default run (it takes a while); run with --group efficiency-thorough.
  */
 class PublishedThoroughTest extends TestCase
 {
@@ -46,6 +47,7 @@ class PublishedThoroughTest extends TestCase
             [$problem, $containers] = explode(',', $line);
             self::$expectedIvancic[$problem] = (int) $containers;
         }
+        self::$containerCountLastrunPath = self::lastrunPath('ivancic-expected-thorough.csv');
     }
 
     #[DataProvider('publishedData')]
@@ -71,6 +73,8 @@ class PublishedThoroughTest extends TestCase
     public function testIvancic(string $problem, Box $box, ItemList $items): void
     {
         $packedBoxes = Strategies::multi('thorough', [$box], $items, []);
+
+        self::appendLastrun(self::$containerCountLastrunPath, sprintf("%s,%d\n", $problem, $packedBoxes->count()));
 
         $packed = 0;
         foreach ($packedBoxes as $packedBox) {

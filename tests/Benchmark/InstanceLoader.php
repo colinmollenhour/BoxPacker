@@ -72,6 +72,22 @@ final class InstanceLoader
     }
 
     /**
+     * Whether a dataset's instances are single-container ('single') or pack-everything ('multi') problems.
+     */
+    public static function kind(string $dataset): string
+    {
+        if (preg_match('/^br(\d+)$/', $dataset, $m) && isset(self::BR_TYPES[(int) $m[1]])) {
+            return 'single';
+        }
+
+        return match ($dataset) {
+            'loh-nee' => 'single',
+            'ivancic', 'bookshop-3d', 'bookshop-2d', 'overlong' => 'multi',
+            default => throw new InvalidArgumentException("Unknown dataset {$dataset}"),
+        };
+    }
+
+    /**
      * @return list<string>
      */
     public static function expandDatasetNames(string $spec): array

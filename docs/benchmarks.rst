@@ -32,9 +32,10 @@ Groups are available too: ``ecommerce`` (Loh/Nee, BR1-4, Ivancic), ``container``
 Results
 -------
 
-``PackingStrategy::Fast`` (the original algorithm) against ``PackingStrategy::Thorough`` with its default settings
-(search budget 10,000 placements, beam width up to 16, at least 50% of each item's base supported), PHP 8.4, one core
-per instance:
+``PackingStrategy::Fast`` (the original algorithm) against ``PackingStrategy::Thorough`` with the library's default
+settings (search budget 10,000 placements, beam width up to 16, at least 50% of each item's base supported), except
+that weight balancing is turned off for the multi-container sets (Ivancic and bookshop), as it is for ``Fast``; PHP
+8.4, one core per instance:
 
 =====================  =================  ===============================  =================
 Dataset                Fast               Thorough                         Thorough time
@@ -82,17 +83,43 @@ Running
     # strategy options, e.g. a larger search budget and full support
     bin/benchmark --strategy=thorough --opt=budget=40000 --opt=support=1
 
+``--list`` shows each strategy's options. The ``thorough`` strategy uses the library's defaults, except that weight
+balancing is off unless ``--opt=balance=N`` is given. The ``block`` strategy runs the search engine on its own, for
+single-container datasets only, and has its own defaults (beam width 8, full support, no search budget). Unknown
+strategies, datasets and options, and option values out of range, are rejected before anything is run.
+
 Every strategy is deterministic unless a time limit is given, so the same command always reports the same quality
 figures. Each packed box is also checked independently for overlaps, items outside the box, disallowed orientations
-and overweight boxes, and the smallest fraction of any item's base that is supported is reported.
+and overweight boxes, and the smallest fraction of any item's base that is supported is reported. An instance that
+fails with an error or produces an invalid packing is reported (``ERRORS``, ``INVALID``), counts as worse than a
+valid baseline result in a ``--compare``, and makes ``bin/benchmark`` exit with status 1.
+
+With ``--compare``, the change against the baseline is worked out over the instances both runs have, so a ``--limit``
+run can be compared with a full saved one; the counts of instances only in one run or the other are shown.
+
+Baselines
+---------
 
 The PHPUnit suites in ``tests/Published*Test.php`` and ``tests/BookShop*Test.php`` hold the expected per-instance
-results for regression testing; ``tests/data/*-lastrun.csv`` receives the values of the latest run. The thorough
-strategy's baselines are in the ``efficiency-thorough`` group, which is not run by default:
+results for regression testing, in ``tests/data/*-expected*.csv``. Every run also writes the values it actually
+produced to a sibling ``tests/data/*-lastrun*.csv`` file (``bookshop-expected-thorough.csv`` has
+``bookshop-lastrun-thorough.csv``, and so on), which git ignores. The thorough strategy's baselines are in the
+``efficiency-thorough`` group, which is not run by default:
 
 .. code-block:: shell
 
     php -d memory_limit=-1 vendor/bin/phpunit --group efficiency-thorough
 
-After an intentional change to the algorithm, regenerate them with ``bin/benchmark --strategy=thorough --datasets=...
---csv=...`` and review the differences.
+To accept new results after an intentional change to the algorithm, run the whole group (not a ``--filter`` run, which
+writes only some of the rows), copy each ``*-lastrun*.csv`` it wrote over its ``*-expected*.csv``, and review the
+differences with ``git diff`` before committing:
+
+.. code-block:: shell
+
+    for f in tests/data/*-lastrun-thorough.csv; do cp "$f" "${f/-lastrun/-expected}"; done
+    git diff --stat tests/data
+
+``bin/benchmark --csv=PATH`` writes one ``test name,value`` line per instance: the utilisation for single-container
+datasets (for example ``--datasets=loh-nee,br1-15`` gives the format of ``published-expected-thorough.csv``) or the
+number of containers for ``--datasets=ivancic`` on its own. It refuses other combinations, so use the PHPUnit lastrun
+files for the bookshop baselines.

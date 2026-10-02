@@ -19,6 +19,13 @@ use DVDoug\BoxPacker\PackingStrategy;
 use DVDoug\BoxPacker\VolumePacker;
 use InvalidArgumentException;
 
+use function array_keys;
+use function implode;
+use function in_array;
+use function is_finite;
+use function is_numeric;
+use function preg_match;
+
 /**
  * The named ways the benchmark can solve an instance. Each strategy is deterministic for a given set of options
  * so results are repeatable run-to-run (time limits are only applied when explicitly asked for).
@@ -26,16 +33,84 @@ use InvalidArgumentException;
 final class Strategies
 {
     /**
+     * The options each strategy accepts.
+     */
+    private const OPTIONS = [
+        'legacy' => ['angled'],
+        'legacy-subset' => [],
+        'block' => ['width', 'budget', 'support', 'time', 'rule', 'scoring', 'angled'],
+        'thorough' => ['width', 'budget', 'support', 'time', 'balance', 'angled'],
+    ];
+
+    /**
      * @return array<string, string>
      */
     public static function describe(): array
     {
         return [
             'legacy' => 'Original layer packer: VolumePacker::pack() / Packer::pack() (no weight balancing; options: angled)',
-            'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers',
-            'block' => 'Block-building beam search engine only (options: width, budget, support, time, rule, scoring, angled)',
-            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack(), library defaults unless overridden (options: width, budget, support, time, balance, angled)',
+            'legacy-subset' => 'Original layer packer with VolumePacker::packBestSubset() for single containers (no weight balancing; no options)',
+            'block' => 'Block-building beam search engine only, single containers only; defaults width=8, support=1, no budget, unlike Thorough (options: width, budget, support, time, rule, scoring, angled)',
+            'thorough' => 'PackingStrategy::Thorough: VolumePacker::pack() / Packer::pack(), library defaults except weight balancing off unless balance=N (options: width, budget, support, time, balance, angled)',
         ];
+    }
+
+    public static function supportsMulti(string $strategy): bool
+    {
+        self::validateStrategy($strategy);
+
+        return $strategy !== 'block';
+    }
+
+    public static function validateStrategy(string $strategy): void
+    {
+        if (!isset(self::OPTIONS[$strategy])) {
+            throw new InvalidArgumentException("Unknown strategy {$strategy}; known: " . implode(', ', array_keys(self::OPTIONS)));
+        }
+    }
+
+    /**
+     * @param array<string, string> $options
+     */
+    public static function validateOptions(string $strategy, array $options): void
+    {
+        self::validateStrategy($strategy);
+        foreach ($options as $key => $value) {
+            $key = (string) $key;
+            if (!in_array($key, self::OPTIONS[$strategy], true)) {
+                $accepted = self::OPTIONS[$strategy] === [] ? 'none' : implode(', ', self::OPTIONS[$strategy]);
+                throw new InvalidArgumentException("Strategy {$strategy} does not take option {$key} (accepted: {$accepted})");
+            }
+            $valid = match ($key) {
+                'width' => self::isInt($value) && (int) $value >= 1,
+                'budget' => $value === 'none' || self::isInt($value),
+                'support' => self::isFloat($value) && (float) $value >= 0 && (float) $value <= 1,
+                'time' => self::isFloat($value) && (float) $value > 0,
+                'rule', 'scoring', 'angled' => $value === '0' || $value === '1',
+                'balance' => self::isInt($value),
+            };
+            if (!$valid) {
+                $expected = match ($key) {
+                    'width' => 'an integer of at least 1',
+                    'budget' => 'a non-negative integer or none',
+                    'support' => 'a number from 0 to 1',
+                    'time' => 'a number of seconds greater than 0',
+                    'rule', 'scoring', 'angled' => '0 or 1',
+                    'balance' => 'a non-negative integer',
+                };
+                throw new InvalidArgumentException("Option {$key}={$value} is invalid: expected {$expected}");
+            }
+        }
+    }
+
+    private static function isInt(string $value): bool
+    {
+        return preg_match('/^\d+$/', $value) === 1;
+    }
+
+    private static function isFloat(string $value): bool
+    {
+        return is_numeric($value) && is_finite((float) $value);
     }
 
     /**
@@ -126,7 +201,8 @@ final class Strategies
     }
 
     /**
-     * Weight balancing is off unless asked for (balance=N boxes), as for the legacy strategy.
+     * Weight balancing is off unless asked for (balance=N boxes), as for the legacy strategy, so this is not quite
+     * the library's default configuration.
      *
      * @param list<Box>             $boxes
      * @param array<string, string> $options
