@@ -297,9 +297,12 @@ class Packer implements LoggerAwareInterface
      */
     private function doThoroughPacking(VolumePackerFactory $volumePackerFactory): PackedBoxList
     {
+        // nothing is taken from the order's items or box quantities until the packing is final, so that a timeout
+        // part way through leaves both as they were
+        $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
         $thoroughPacker = new ThoroughPacker(
             $this->boxes,
-            $this->boxQuantitiesAvailable,
+            $boxQuantitiesAvailable,
             $volumePackerFactory,
             $this->costCalculator ?? new DefaultPackedBoxCostCalculator(),
             $this->costCalculator !== null,
@@ -307,13 +310,13 @@ class Packer implements LoggerAwareInterface
         );
         $thoroughPacker->setLogger($this->logger);
 
-        // both strategies pack copies of the items, and the items packed by the result kept are then removed from the
-        // order's list (set up before the thorough search takes its boxes)
+        // both strategies pack copies of the items
         $fastPacker = $this->items->count() <= self::FAST_COMPARISON_LIMIT ? $this->packFastForComparison() : null;
 
         $thoroughItems = clone $this->items;
         $packedBoxes = new PackedBoxList($this->packedBoxSorter);
         $packedBoxes->insertFromArray($thoroughPacker->pack($thoroughItems));
+        $unpackedItems = $thoroughItems;
 
         // keep the fast packer's boxes if they are better (and supported well enough), time permitting
         if ($fastPacker !== null && !$volumePackerFactory->isOutOfTime()) {
@@ -325,41 +328,54 @@ class Packer implements LoggerAwareInterface
             $unpackedDecider = $fastPacker->items->count() <=> $thoroughItems->count();
             if ($fastIsSupported && ($unpackedDecider < 0 || ($unpackedDecider === 0 && $thoroughPacker->compareSolutions($fastBoxes, $packedBoxes) < 0))) {
                 $packedBoxes = $fastBoxes;
+                $unpackedItems = $fastPacker->items;
                 foreach ($this->boxes as $box) {
                     if (self::isUsable($box)) {
-                        $this->boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
+                        $boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
                     }
                 }
             }
         }
-        foreach ($packedBoxes as $packedBox) {
-            $this->items->removePackedItems($packedBox->items);
-        }
 
-        if ($this->items->count() > 0) {
+        if ($unpackedItems->count() > 0) {
             if ($this->throwOnUnpackableItem) {
+                $this->takePackedItemsAndBoxes($packedBoxes, $boxQuantitiesAvailable);
                 throw new NoBoxesAvailableException("No boxes could be found for item '{$this->items->top()->getDescription()}'", $this->items);
             }
-            $this->logger->log(LogLevel::INFO, "{$this->items->count()} unpackable items found");
+            $this->logger->log(LogLevel::INFO, "{$unpackedItems->count()} unpackable items found");
         }
 
         // weight balancing repacks boxes many times over, so each repack gets the effort of an improvement attempt
         if ($packedBoxes->count() > 1 && $packedBoxes->count() <= $this->maxBoxesToBalanceWeight && !$volumePackerFactory->isOutOfTime()) {
             $thoroughPacker->limitEffortForRepacking();
-            $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
-            $redistributor = new WeightRedistributor($this->boxes, $this->packedBoxSorter, $boxQuantitiesAvailable, $this->timeoutChecker, $volumePackerFactory);
+            $redistributedQuantities = clone $boxQuantitiesAvailable;
+            $redistributor = new WeightRedistributor($this->boxes, $this->packedBoxSorter, $redistributedQuantities, $this->timeoutChecker, $volumePackerFactory);
             $redistributor->setLogger($this->logger);
             $redistributed = $redistributor->redistributeWeight($packedBoxes);
             if ($thoroughPacker->compareSolutions($redistributed, $packedBoxes) <= 0) {
                 $packedBoxes = $redistributed;
-                $this->boxQuantitiesAvailable = $boxQuantitiesAvailable;
+                $boxQuantitiesAvailable = $redistributedQuantities;
             }
             $volumePackerFactory->resetCallLimits();
         }
 
+        $this->takePackedItemsAndBoxes($packedBoxes, $boxQuantitiesAvailable);
         $this->logger->log(LogLevel::INFO, "[PACKING COMPLETED], {$packedBoxes->count()} boxes");
 
         return $packedBoxes;
+    }
+
+    /**
+     * Commit a final packing: remove the packed items from the order's list, and take the boxes used.
+     *
+     * @param WeakMap<Box, int> $boxQuantitiesAvailable the quantities left once the packing's boxes are taken
+     */
+    private function takePackedItemsAndBoxes(PackedBoxList $packedBoxes, WeakMap $boxQuantitiesAvailable): void
+    {
+        foreach ($packedBoxes as $packedBox) {
+            $this->items->removePackedItems($packedBox->items);
+        }
+        $this->boxQuantitiesAvailable = $boxQuantitiesAvailable;
     }
 
     /**

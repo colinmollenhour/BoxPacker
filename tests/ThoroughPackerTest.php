@@ -33,6 +33,7 @@ use function spl_object_id;
 use function usort;
 
 use const INF;
+use const PHP_INT_MAX;
 
 #[CoversClass(Packer::class)]
 #[CoversClass(ThoroughPacker::class)]
@@ -480,6 +481,46 @@ class ThoroughPackerTest extends TestCase
         } catch (TimeoutException) {
             self::assertSame($instance['items']->count(), $packer->getUnpackedItems()->count());
         }
+    }
+
+    public function testATimeoutAtAnyPointTakesNoItemsOrBoxes(): void
+    {
+        // there are just enough boxes for the order (2, once the improvements and weight balancing have run), so if an
+        // interrupted packing took any, packing again could not fit everything
+        $make = static function (): Packer {
+            $packer = self::thoroughPacker();
+            $packer->addBox(new LimitedSupplyTestBox('Box', 10, 10, 10, 0, 10, 10, 10, 100, 2));
+            $packer->addItem(new TestItem('Heavy', 5, 5, 5, 45, Rotation::BestFit), 4);
+            $packer->addItem(new TestItem('Light', 5, 5, 5, 5, Rotation::BestFit), 4);
+
+            return $packer;
+        };
+        $expected = self::describe($make()->pack());
+
+        for ($call = 1;; ++$call) {
+            $packer = $make();
+            $packer->setTimeoutChecker(self::timeoutOnCall($call));
+            try {
+                $packer->pack();
+                break; // the packing needs fewer checks than this
+            } catch (TimeoutException) {
+                self::assertCount(8, $packer->getUnpackedItems(), "timeout on call {$call}");
+                $packer->setTimeoutChecker(self::timeoutOnCall(PHP_INT_MAX));
+                self::assertEquals($expected, self::describe($packer->pack()), "timeout on call {$call}");
+            }
+        }
+        self::assertGreaterThan(10, $call);
+    }
+
+    public function testTheLargestSearchBudgetMeansNoCap(): void
+    {
+        $packer = self::thoroughPacker();
+        $packer->setSearchBudget(PHP_INT_MAX);
+        $packer->addBox(new TestBox('Box', 10, 10, 10, 0, 10, 10, 10, 100));
+        $packer->addItem(new TestItem('Heavy', 5, 5, 5, 45, Rotation::BestFit), 4);
+        $packer->addItem(new TestItem('Light', 5, 5, 5, 5, Rotation::BestFit), 4);
+
+        self::assertCount(2, $packer->pack());
     }
 
     public function testTheTimeoutCheckerIsAskedDuringTheSearch(): void

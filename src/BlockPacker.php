@@ -532,7 +532,7 @@ class BlockPacker implements LoggerAwareInterface
                         $childCompleted = $this->completions[$signature]; // already evaluated in a narrower pass
                     } else {
                         $childCompleted = $this->greedy(clone $child);
-                        if ($this->cachedCompletionPlacements < self::MAX_CACHED_COMPLETION_PLACEMENTS) {
+                        if ($this->cachedCompletionPlacements + count($childCompleted->placements) <= self::MAX_CACHED_COMPLETION_PLACEMENTS) {
                             $this->completions[$signature] = $childCompleted;
                             $this->cachedCompletionPlacements += count($childCompleted->placements);
                         }

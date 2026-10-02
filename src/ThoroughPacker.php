@@ -534,7 +534,9 @@ class ThoroughPacker implements LoggerAwareInterface
         $this->volumePackerFactory->setCallTimeLimit($remaining === null ? null : $remaining / 10);
         $searchBudget = $this->volumePackerFactory->getSearchBudget();
         $this->improvementPlacements = 0;
-        $this->maxImprovementPlacements = $searchBudget === null || $hasTimeBudget ? PHP_INT_MAX : self::IMPROVEMENT_BUDGET_FACTOR * $searchBudget;
+        $this->maxImprovementPlacements = $searchBudget === null || $hasTimeBudget || $searchBudget > intdiv(PHP_INT_MAX, self::IMPROVEMENT_BUDGET_FACTOR)
+            ? PHP_INT_MAX
+            : self::IMPROVEMENT_BUDGET_FACTOR * $searchBudget;
         $this->volumePackerFactory->setCallBudget($searchBudget === null ? null : intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR));
 
         $lowerBound = $this->lowerBound($solution);
