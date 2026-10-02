@@ -1,8 +1,13 @@
 # Soft packing: envelopes, mailers, bags (and a few ideas from outside the box)
 
-Status: research + design proposal. Nothing here is implemented in `src/`. All numbers about carriers are from secondary
-sources (primary pages for USPS/arXiv were unreachable from the research sandbox) and **must be verified before being
-used as shipped defaults**. See "Sources" and "Risks".
+Status: research + design proposal; phases 0 and 1 and parts of 2 and 3 are implemented, see `docs/soft-packing.rst`:
+F1 `SoftPack`/`SoftPackAsBox`/`Packer::addSoftPack()`, F2 `PackedBox::getOuterDimensions()`, F3
+`FormatCostCalculator`/`ParcelFormat`/`DimensionalWeightCostCalculator`, F4 `ReshapableItem`/`ItemState` (used only
+where own shapes leave items out), F5 `Protection`/`ProtectedItem`/`ProtectiveBox`, F9 (v1) `RightSizeBox`. Not
+implemented: limited supply of soft packs, F6 bundler, F7 hex rolls, F8 uncertainty/calibrator, F9 v2 normal
+patterns, F10 planner, F11-F15. All numbers about carriers are from secondary sources (primary pages for USPS/arXiv
+were unreachable from the research sandbox) and **must be verified before being used as shipped defaults**. See
+"Sources" and "Risks".
 
 ## TL;DR
 

@@ -43,6 +43,8 @@ class ItemList implements Countable, IteratorAggregate
 
     private ?bool $hasNoRotationItems = null;
 
+    private ?bool $hasReshapableItems = null;
+
     /**
      * @var array<string, int>
      */
@@ -90,6 +92,10 @@ class ItemList implements Countable, IteratorAggregate
 
         if (isset($this->hasNoRotationItems)) { // normally lazy evaluated, override if that's already been done
             $this->hasNoRotationItems = $this->hasNoRotationItems || $item->getAllowedRotation() === Rotation::Never;
+        }
+
+        if (isset($this->hasReshapableItems)) { // normally lazy evaluated, override if that's already been done
+            $this->hasReshapableItems = $this->hasReshapableItems || $item instanceof ReshapableItem;
         }
 
         if ($item instanceof LinkedItem) {
@@ -285,6 +291,24 @@ class ItemList implements Countable, IteratorAggregate
         }
 
         return $this->hasNoRotationItems;
+    }
+
+    /**
+     * Does this list contain items that can be packed in more than one shape.
+     */
+    public function hasReshapableItems(): bool
+    {
+        if (!isset($this->hasReshapableItems)) {
+            $this->hasReshapableItems = false;
+            foreach ($this->list as $item) {
+                if ($item instanceof ReshapableItem) {
+                    $this->hasReshapableItems = true;
+                    break;
+                }
+            }
+        }
+
+        return $this->hasReshapableItems;
     }
 
     /**

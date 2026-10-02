@@ -112,9 +112,16 @@ class BlockPacker implements LoggerAwareInterface
     private readonly int $weightCapacity;
 
     /**
-     * @var array<int, list<array{0: int, 1: int, 2: int}>>
+     * @var array<int, list<array{0: int, 1: int, 2: int, 3: ?ItemState}>>
      */
     private array $orientations = [];
+
+    /**
+     * The state each orientation of a type puts the item in, by "width|length|height".
+     *
+     * @var array<int, array<string, ?ItemState>>
+     */
+    private array $orientationStates = [];
 
     /**
      * @var array<int, int>
@@ -154,6 +161,13 @@ class BlockPacker implements LoggerAwareInterface
      * @var array<int, int>
      */
     private array $minFootprintEdges = [];
+
+    /**
+     * Smallest volume any orientation (state) of the type takes up.
+     *
+     * @var array<int, int>
+     */
+    private array $minVolumes = [];
 
     private int $totalItems = 0;
 
@@ -249,8 +263,9 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * @param iterable<Item> $items
+     * @param bool           $useStates whether items may be placed in their states (see {@see ReshapableItem}) as well as in their own shape
      */
-    public function __construct(private readonly Box $box, iterable $items, private readonly bool $preferStableOrientations = true)
+    public function __construct(private readonly Box $box, iterable $items, private readonly bool $preferStableOrientations = true, private readonly bool $useStates = true)
     {
         $this->logger = new NullLogger();
         $this->boxWidth = $box->getInnerWidth();
@@ -264,7 +279,7 @@ class BlockPacker implements LoggerAwareInterface
                 $this->flatItems[] = $item; // take up no space: added at the end
                 continue;
             }
-            $key = $item->getWidth() . '|' . $item->getLength() . '|' . $item->getDepth() . '|' . $item->getWeight() . '|' . $item->getAllowedRotation()->name;
+            $key = $item->getWidth() . '|' . $item->getLength() . '|' . $item->getDepth() . '|' . $item->getWeight() . '|' . $item->getAllowedRotation()->name . ($this->useStates ? ItemState::signatureOf($item) : '');
             if ($item instanceof ConstrainedPlacementItem) {
                 $key .= '|#' . spl_object_id($item);
             } elseif ($item instanceof LinkedItem) {
@@ -277,6 +292,9 @@ class BlockPacker implements LoggerAwareInterface
                 $this->volumes[$type] = $item->getWidth() * $item->getLength() * $item->getDepth();
                 $this->weights[$type] = $item->getWeight();
                 $this->orientations[$type] = $this->buildOrientations($item);
+                foreach ($this->orientations[$type] as [$ow, $ol, $oh, $state]) {
+                    $this->orientationStates[$type][$ow . '|' . $ol . '|' . $oh] = $state;
+                }
                 $this->constrained[$type] = $item instanceof ConstrainedPlacementItem;
                 $this->itemsByType[$type] = [];
                 $this->initialCounts[$type] = 0;
@@ -293,10 +311,11 @@ class BlockPacker implements LoggerAwareInterface
                 continue;
             }
             $this->packableVolume += $count * $this->volumes[$type];
-            $this->minHeights[$type] = $this->minFootprintEdges[$type] = PHP_INT_MAX;
+            $this->minHeights[$type] = $this->minFootprintEdges[$type] = $this->minVolumes[$type] = PHP_INT_MAX;
             foreach ($this->orientations[$type] as [$w, $l, $h]) {
                 $this->minHeights[$type] = min($this->minHeights[$type], $h);
                 $this->minFootprintEdges[$type] = min($this->minFootprintEdges[$type], $w, $l);
+                $this->minVolumes[$type] = min($this->minVolumes[$type], $w * $l * $h);
             }
         }
     }
@@ -365,6 +384,7 @@ class BlockPacker implements LoggerAwareInterface
             $this->packableVolume += $this->initialCounts[$type] * $this->volumes[$type];
             $this->minHeights[$type] = min(array_column($uprights, 2));
             $this->minFootprintEdges[$type] = min(array_column($uprights, 1));
+            $this->minVolumes[$type] = $this->volumes[$type];
         }
     }
 
@@ -1115,7 +1135,7 @@ class BlockPacker implements LoggerAwareInterface
                     return false;
                 }
             }
-            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle));
+            $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle, $angle == 0.0 ? $this->stateOf($type, $w, $l, $h) : null));
         }
 
         return true;
@@ -1202,7 +1222,7 @@ class BlockPacker implements LoggerAwareInterface
             $state->tops[$z2][] = [$x, $y, $x2, $y2];
         }
         // the filter only changes if the type just used up was the one setting one of its minimums
-        if ($state->counts[$type] === 0 && ($this->minHeights[$type] <= $state->minHeight || $this->minFootprintEdges[$type] <= $state->minFootprintEdge || $this->volumes[$type] <= $state->minVolume)) {
+        if ($state->counts[$type] === 0 && ($this->minHeights[$type] <= $state->minHeight || $this->minFootprintEdges[$type] <= $state->minFootprintEdge || $this->minVolumes[$type] <= $state->minVolume)) {
             $this->updateSpaceFilter($state);
         }
         $state->spaces = $this->occupy($state, $x, $y, $z, $x2, $y2, $z2);
@@ -1321,7 +1341,7 @@ class BlockPacker implements LoggerAwareInterface
             if ($count > 0) {
                 $state->minHeight = min($state->minHeight, $this->minHeights[$type]);
                 $state->minFootprintEdge = min($state->minFootprintEdge, $this->minFootprintEdges[$type]);
-                $state->minVolume = min($state->minVolume, $this->volumes[$type]);
+                $state->minVolume = min($state->minVolume, $this->minVolumes[$type]);
             }
         }
     }
@@ -1334,7 +1354,7 @@ class BlockPacker implements LoggerAwareInterface
     {
         foreach ($this->itemsOf($placement) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
             $index = $next[$type] ?? 0;
-            $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h, $angle));
+            $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h, $angle, $angle == 0.0 ? $this->stateOf($type, $w, $l, $h) : null));
             $next[$type] = $index + 1;
         }
     }
@@ -1353,11 +1373,11 @@ class BlockPacker implements LoggerAwareInterface
             if ($orientation === null || $item->getWeight() > $weightLeft) {
                 continue;
             }
-            [$w, $l, $h] = $orientation;
+            [$w, $l, $h, $state] = $orientation;
             if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), 0, 0, 0, $w, $l, $h)) {
                 continue;
             }
-            $list->insert(new PackedItem($item, 0, 0, 0, $w, $l, $h));
+            $list->insert(new PackedItem($item, 0, 0, 0, $w, $l, $h, state: $state));
             $weightLeft -= $item->getWeight();
         }
 
@@ -1365,27 +1385,20 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Distinct orientations of the item that fit the empty box, keeping only stable ones where there are any
-     * (same rule as the layer packer).
+     * Distinct orientations of the item (in any of its states) that fit the empty box, as [width, length, height,
+     * state], keeping only stable ones where there are any (same rule as the layer packer). Where a state has the
+     * same dimensions as the item itself, the item's own shape is kept.
      *
-     * @return list<array{0: int, 1: int, 2: int}>
+     * @return list<array{0: int, 1: int, 2: int, 3: ?ItemState}>
      */
     private function buildOrientations(Item $item): array
     {
-        $w = $item->getWidth();
-        $l = $item->getLength();
-        $d = $item->getDepth();
-
-        $permutations = match ($item->getAllowedRotation()) {
-            Rotation::Never => [[$w, $l, $d]],
-            Rotation::KeepFlat => [[$w, $l, $d], [$l, $w, $d]],
-            Rotation::BestFit => [[$w, $l, $d], [$l, $w, $d], [$w, $d, $l], [$l, $d, $w], [$d, $w, $l], [$d, $l, $w]],
-        };
-
         $fitting = [];
-        foreach ($permutations as $permutation) {
-            if ($permutation[0] <= $this->boxWidth && $permutation[1] <= $this->boxLength && $permutation[2] <= $this->boxDepth) {
-                $fitting[$permutation[0] . '|' . $permutation[1] . '|' . $permutation[2]] = $permutation;
+        foreach (ItemState::shapesOf($item, $this->useStates) as [$w, $l, $d, $rotation, $state]) {
+            foreach ($rotation->permutations($w, $l, $d) as [$ow, $ol, $oh]) {
+                if ($ow <= $this->boxWidth && $ol <= $this->boxLength && $oh <= $this->boxDepth) {
+                    $fitting[$ow . '|' . $ol . '|' . $oh] ??= [$ow, $ol, $oh, $state];
+                }
             }
         }
 
@@ -1401,6 +1414,15 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return $stable !== [] ? $stable : array_values($fitting);
+    }
+
+    /**
+     * The state an item of this type is in when placed square with these dimensions (null for its own shape).
+     * Angled placements only ever use the item's own shape.
+     */
+    private function stateOf(int $type, int $width, int $length, int $height): ?ItemState
+    {
+        return $this->orientationStates[$type][$width . '|' . $length . '|' . $height] ?? null;
     }
 
     /**

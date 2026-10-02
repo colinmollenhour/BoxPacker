@@ -23,6 +23,7 @@ use function array_map;
 use function spl_object_id;
 use function rawurlencode;
 use function sort;
+use function in_array;
 
 use const JSON_THROW_ON_ERROR;
 use const JSON_NUMERIC_CHECK;
@@ -138,6 +139,28 @@ readonly class PackedBox implements JsonSerializable
     public function getRemainingWeight(): int
     {
         return $this->box->getMaxWeight() - $this->getWeight();
+    }
+
+    /**
+     * The outside size of the packed parcel as a carrier would measure it, as [width, length, depth]: the box's
+     * outer dimensions; for a soft pack, the pack as filled (see {@see SoftPackAsBox}); for a right-size box, the
+     * contents plus the walls (see {@see RightSizeBox}).
+     *
+     * @return array{0: int, 1: int, 2: int}
+     */
+    public function getOuterDimensions(): array
+    {
+        if ($this->box instanceof SoftPackAsBox) {
+            return $this->box->getFilledDimensions($this->getUsedDepth());
+        }
+
+        if ($this->box instanceof RightSizeBox) {
+            $walls = 2 * $this->box->getWallThickness();
+
+            return [$this->getUsedWidth() + $walls, $this->getUsedLength() + $walls, $this->getUsedDepth() + $walls];
+        }
+
+        return [$this->box->getOuterWidth(), $this->box->getOuterLength(), $this->box->getOuterDepth()];
     }
 
     public function getInnerVolume(): int
@@ -277,13 +300,18 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Packed edges must be the item's own dimensions, permuted only as its Rotation allows.
+     * Packed edges must be the item's own dimensions (or those of one of its states), permuted only as its Rotation
+     * allows.
      */
     private function packedDimensionsMatchItem(PackedItem $packedItem): bool
     {
         $item = $packedItem->item;
+        $state = $packedItem->state;
+        if ($state !== null && (!$item instanceof ReshapableItem || !in_array($state, $item->getStates(), true))) {
+            return false;
+        }
         $packed = [$packedItem->width, $packedItem->length, $packedItem->depth];
-        $defined = [$item->getWidth(), $item->getLength(), $item->getDepth()];
+        $defined = $state !== null ? [$state->width, $state->length, $state->depth] : [$item->getWidth(), $item->getLength(), $item->getDepth()];
         $packedSorted = $packed;
         $definedSorted = $defined;
         sort($packedSorted);
@@ -292,9 +320,9 @@ readonly class PackedBox implements JsonSerializable
             return false;
         }
 
-        return match ($item->getAllowedRotation()) {
+        return match ($state?->getAllowedRotation($item) ?? $item->getAllowedRotation()) {
             Rotation::Never => $packed === $defined && !$packedItem->isAngled(),
-            Rotation::KeepFlat => $packedItem->depth === $item->getDepth(),
+            Rotation::KeepFlat => $packedItem->depth === $defined[2],
             Rotation::BestFit => true,
         };
     }

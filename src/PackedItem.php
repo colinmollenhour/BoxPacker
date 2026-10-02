@@ -47,6 +47,7 @@ readonly class PackedItem implements JsonSerializable
         public int $length,
         public int $depth,
         public float $angle = 0.0,
+        public ?ItemState $state = null,
     ) {
         $this->volume = $width * $length * $depth;
         $this->weight = $item->getWeight();
@@ -87,6 +88,7 @@ readonly class PackedItem implements JsonSerializable
             $orientatedItem->width,
             $orientatedItem->length,
             $orientatedItem->depth,
+            state: $orientatedItem->state,
         );
     }
 
@@ -104,6 +106,7 @@ readonly class PackedItem implements JsonSerializable
         }
 
         $angle = $this->angle != 0.0 ? ['angle' => $this->angle, 'boundingWidth' => $this->boundingWidth, 'boundingLength' => $this->boundingLength] : [];
+        $state = $this->state !== null ? ['state' => $this->state->name] : [];
 
         return [
             'x' => $this->x,
@@ -113,6 +116,7 @@ readonly class PackedItem implements JsonSerializable
             'length' => $this->length,
             'depth' => $this->depth,
             ...$angle,
+            ...$state,
             'item' => [
                 ...$userValues,
                 'description' => $this->item->getDescription(),

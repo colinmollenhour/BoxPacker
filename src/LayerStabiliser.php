@@ -35,7 +35,7 @@ class LayerStabiliser
             $newZLayer = new PackedLayer();
             foreach ($oldZLayer->items as $oldZItem) {
                 $newZ = $oldZItem->z - $oldZStart + $currentZ;
-                $newZItem = new PackedItem($oldZItem->item, $oldZItem->x, $oldZItem->y, $newZ, $oldZItem->width, $oldZItem->length, $oldZItem->depth);
+                $newZItem = new PackedItem($oldZItem->item, $oldZItem->x, $oldZItem->y, $newZ, $oldZItem->width, $oldZItem->length, $oldZItem->depth, $oldZItem->angle, $oldZItem->state);
                 $newZLayer->insert($newZItem);
             }
 

@@ -18,6 +18,7 @@ use WeakMap;
 
 use function array_pop;
 use function count;
+use function implode;
 use function max;
 use function min;
 use function usort;
@@ -42,6 +43,11 @@ class Packer implements LoggerAwareInterface
     protected ItemList $items;
 
     protected BoxList $boxes;
+
+    /**
+     * @var SoftPack[]
+     */
+    protected array $softPacks = [];
 
     /**
      * @var WeakMap<Box, int>
@@ -133,6 +139,18 @@ class Packer implements LoggerAwareInterface
         foreach ($this->boxes as $box) {
             $this->setBoxQuantity($box, $box instanceof LimitedSupplyBox ? $box->getQuantityAvailable() : PHP_INT_MAX);
         }
+    }
+
+    /**
+     * Add a soft pack (mailer, envelope, bag): a container whose inside size depends on how thick it is filled, see
+     * {@see SoftPack}. On each packing it is tried at every thickness the order could fill it to, as a box of that
+     * thickness ({@see SoftPackAsBox}), so a packed box's ->box is a SoftPackAsBox when a soft pack was chosen.
+     * Soft packs are assumed to be in unlimited supply.
+     */
+    public function addSoftPack(SoftPack $softPack): void
+    {
+        $this->softPacks[] = $softPack;
+        $this->logger->log(LogLevel::INFO, "added soft pack {$softPack->getReference()}", ['softPack' => $softPack]);
     }
 
     /**
@@ -258,6 +276,12 @@ class Packer implements LoggerAwareInterface
     {
         $this->logger->log(LogLevel::INFO, '[PACKING STARTED]');
         $this->timeoutChecker?->start();
+
+        return $this->withSoftPackCandidates($this->doPack(...));
+    }
+
+    private function doPack(): PackedBoxList
+    {
         $volumePackerFactory = $this->createVolumePackerFactory();
 
         if ($this->strategy === PackingStrategy::Thorough && !$this->beStrictAboutItemOrdering) {
@@ -426,6 +450,15 @@ class Packer implements LoggerAwareInterface
     {
         $this->logger->log(LogLevel::INFO, '[PACKING STARTED (all permutations)]');
         $this->timeoutChecker?->start();
+
+        return $this->withSoftPackCandidates($this->doPackAllPermutations(...));
+    }
+
+    /**
+     * @return PackedBoxList[]
+     */
+    private function doPackAllPermutations(): array
+    {
         $volumePackerFactory = $this->createVolumePackerFactory();
 
         $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
@@ -488,6 +521,41 @@ class Packer implements LoggerAwareInterface
         }
 
         return $completedPermutations;
+    }
+
+    /**
+     * Run a packing with the boxes plus, for each soft pack, a box for every thickness the items could fill it to,
+     * then put the box list back as it was.
+     *
+     * @template T
+     * @param  callable(): T $packing
+     * @return T
+     */
+    private function withSoftPackCandidates(callable $packing): mixed
+    {
+        if ($this->softPacks === []) {
+            return $packing();
+        }
+
+        $boxes = $this->boxes;
+        $this->boxes = clone $boxes;
+        foreach ($this->softPacks as $softPack) {
+            $thicknesses = SoftPackAsBox::candidateThicknesses($softPack, $this->items);
+            $this->logger->log(LogLevel::DEBUG, "soft pack {$softPack->getReference()} tried at thicknesses " . implode(', ', $thicknesses));
+            foreach ($thicknesses as $thickness) {
+                $candidate = new SoftPackAsBox($softPack, $thickness);
+                if ($candidate->getInnerWidth() > 0 && $candidate->getInnerLength() > 0) {
+                    $this->boxes->insert($candidate);
+                    $this->boxQuantitiesAvailable[$candidate] = PHP_INT_MAX;
+                }
+            }
+        }
+
+        try {
+            return $packing();
+        } finally {
+            $this->boxes = $boxes;
+        }
     }
 
     /**

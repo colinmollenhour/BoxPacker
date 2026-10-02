@@ -37,7 +37,8 @@ class OrientatedItem implements JsonSerializable, Stringable
         public readonly Item $item,
         public readonly int $width,
         public readonly int $length,
-        public readonly int $depth
+        public readonly int $depth,
+        public readonly ?ItemState $state = null,
     ) {
         $this->surfaceFootprint = $width * $length;
 
@@ -81,11 +82,12 @@ class OrientatedItem implements JsonSerializable, Stringable
             'width' => $this->width,
             'length' => $this->length,
             'depth' => $this->depth,
+            ...($this->state !== null ? ['state' => $this->state->name] : []),
         ];
     }
 
     public function __toString(): string
     {
-        return $this->width . '|' . $this->length . '|' . $this->depth;
+        return $this->width . '|' . $this->length . '|' . $this->depth . ($this->state !== null ? '|' . $this->state->name : '');
     }
 }

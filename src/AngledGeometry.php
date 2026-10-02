@@ -171,17 +171,11 @@ final class AngledGeometry
         $width = $box->getInnerWidth();
         $length = $box->getInnerLength();
         $depth = $box->getInnerDepth();
-        $w = $item->getWidth();
-        $l = $item->getLength();
-        $d = $item->getDepth();
-        $orientations = match ($item->getAllowedRotation()) {
-            Rotation::Never => [[$w, $l, $d]],
-            Rotation::KeepFlat => [[$w, $l, $d], [$l, $w, $d]],
-            Rotation::BestFit => [[$w, $l, $d], [$l, $w, $d], [$w, $d, $l], [$l, $d, $w], [$d, $w, $l], [$d, $l, $w]],
-        };
-        foreach ($orientations as [$ow, $ol, $oh]) {
-            if ($ow <= $width && $ol <= $length && $oh <= $depth) {
-                return false;
+        foreach (ItemState::shapesOf($item) as [$w, $l, $d, $rotation]) {
+            foreach ($rotation->permutations($w, $l, $d) as [$ow, $ol, $oh]) {
+                if ($ow <= $width && $ol <= $length && $oh <= $depth) {
+                    return false;
+                }
             }
         }
         foreach (self::uprights($item) as [$long, $short, $height]) {

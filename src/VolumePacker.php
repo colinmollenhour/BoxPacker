@@ -48,6 +48,13 @@ class VolumePacker implements LoggerAwareInterface
 
     private readonly bool $hasNoRotationItems;
 
+    private readonly bool $hasReshapableItems;
+
+    /**
+     * Whether the current pass may place items in their states (see {@see ReshapableItem}).
+     */
+    private bool $useStates = false;
+
     protected PackingStrategy $strategy = PackingStrategy::Fast;
 
     protected int $maxBeamWidth = 16;
@@ -66,10 +73,21 @@ class VolumePacker implements LoggerAwareInterface
     {
         $this->items = clone $items;
 
+        // items the box cannot protect well enough can never go in it
+        $offered = Protection::offeredBy($box);
+        if ($offered !== Protection::Rigid) {
+            foreach ($items as $item) {
+                if (!$offered->covers(Protection::requiredBy($item))) {
+                    $this->items->remove($item);
+                }
+            }
+        }
+
         $this->logger = new NullLogger();
 
-        $this->hasConstrainedItems = $items->hasConstrainedItems();
-        $this->hasNoRotationItems = $items->hasNoRotationItems();
+        $this->hasConstrainedItems = $this->items->hasConstrainedItems();
+        $this->hasNoRotationItems = $this->items->hasNoRotationItems();
+        $this->hasReshapableItems = $this->items->hasReshapableItems();
 
         $this->layerPacker = new LayerPacker($this->box);
         $this->layerPacker->setLogger($this->logger);
@@ -160,15 +178,40 @@ class VolumePacker implements LoggerAwareInterface
      */
     public function pack(): PackedBox
     {
+        return $this->packPreferringOwnShapes(
+            fn (): PackedBox => $this->useThorough()
+                ? $this->packThoroughWithFallback($this->packFast(...))
+                : ($this->needsAngledPlacement() ? $this->packAngledFast() : $this->packFast()),
+            false
+        );
+    }
+
+    /**
+     * Items go in their own shape where everything fits that way. Only when that leaves items out are their states
+     * (see {@see ReshapableItem}) tried, and that packing is kept only if it packs more: more items, or, when
+     * filling for density, more volume.
+     *
+     * @param callable(): PackedBox $packing
+     */
+    private function packPreferringOwnShapes(callable $packing, bool $byVolume): PackedBox
+    {
         if ($this->items->count() === 0) {
             return new PackedBox($this->box, new PackedItemList());
         }
 
-        if ($this->useThorough()) {
-            return $this->packThoroughWithFallback($this->packFast(...));
+        $this->useStates = false;
+        $ownShapes = $packing();
+        if (!$this->hasReshapableItems || $ownShapes->items->count() === $this->items->count()) {
+            return $ownShapes;
         }
 
-        return $this->needsAngledPlacement() ? $this->packAngledFast() : $this->packFast();
+        $this->useStates = true;
+        $withStates = $packing();
+        $decider = $byVolume
+            ? $withStates->getUsedVolume() <=> $ownShapes->getUsedVolume()
+            : $withStates->items->count() <=> $ownShapes->items->count();
+
+        return $decider > 0 ? $withStates : $ownShapes;
     }
 
     /**
@@ -206,7 +249,7 @@ class VolumePacker implements LoggerAwareInterface
      */
     private function packAngledFast(): PackedBox
     {
-        $blockPacker = new BlockPacker($this->box, $this->items);
+        $blockPacker = new BlockPacker($this->box, $this->items, useStates: $this->useStates);
         $blockPacker->setLogger($this->logger);
         $blockPacker->setMaxBeamWidth(1);
         $blockPacker->setMinimumSupport($this->minimumSupport);
@@ -253,7 +296,7 @@ class VolumePacker implements LoggerAwareInterface
 
     private function packThorough(): PackedBox
     {
-        $blockPacker = new BlockPacker($this->box, $this->items);
+        $blockPacker = new BlockPacker($this->box, $this->items, useStates: $this->useStates);
         $blockPacker->setLogger($this->logger);
         $blockPacker->setMaxBeamWidth($this->maxBeamWidth);
         $blockPacker->setTimeLimit($this->searchTimeLimit);
@@ -294,8 +337,10 @@ class VolumePacker implements LoggerAwareInterface
      */
     private function packFast(): PackedBox
     {
+        $this->layerPacker->setUseStates($this->useStates);
         $orientatedItemFactory = new OrientatedItemFactory($this->box);
         $orientatedItemFactory->setLogger($this->logger);
+        $orientatedItemFactory->setUseStates($this->useStates);
         $this->logger->debug("[EVALUATING BOX] {$this->box->getReference()}", ['box' => $this->box]);
 
         // Sometimes "space available" decisions depend on orientation of the box, so try both ways
@@ -347,12 +392,11 @@ class VolumePacker implements LoggerAwareInterface
      */
     public function packBestSubset(): PackedBox
     {
-        if ($this->items->count() === 0) {
-            return new PackedBox($this->box, new PackedItemList());
-        }
-
         // the block search already chooses which items to leave out
-        return $this->useThorough() ? $this->packThoroughWithFallback($this->packBestSubsetFast(...)) : $this->packBestSubsetFast();
+        return $this->packPreferringOwnShapes(
+            fn (): PackedBox => $this->useThorough() ? $this->packThoroughWithFallback($this->packBestSubsetFast(...)) : $this->packBestSubsetFast(),
+            true
+        );
     }
 
     private function packBestSubsetFast(): PackedBox
@@ -509,9 +553,11 @@ class VolumePacker implements LoggerAwareInterface
     {
         $minVolume = PHP_INT_MAX;
         foreach ($items as $item) {
-            $volume = $item->getWidth() * $item->getLength() * $item->getDepth();
-            if ($volume < $minVolume) {
-                $minVolume = $volume;
+            foreach (ItemState::shapesOf($item, $this->useStates) as [$w, $l, $d]) {
+                $volume = $w * $l * $d;
+                if ($volume < $minVolume) {
+                    $minVolume = $volume;
+                }
             }
         }
 
@@ -534,16 +580,19 @@ class VolumePacker implements LoggerAwareInterface
 
     private function itemMayFitInVoid(Item $item, VoidSpace $void): bool
     {
-        $w = $item->getWidth();
-        $l = $item->getLength();
-        $d = $item->getDepth();
+        foreach (ItemState::shapesOf($item, $this->useStates) as [$w, $l, $d, $rotation]) {
+            $fits = match ($rotation) {
+                Rotation::Never => $w <= $void->width && $l <= $void->length && $d <= $void->depth,
+                Rotation::KeepFlat => ($w <= $void->width && $l <= $void->length && $d <= $void->depth)
+                    || ($l <= $void->width && $w <= $void->length && $d <= $void->depth),
+                Rotation::BestFit => $this->bestFitMayFitInVoid($w, $l, $d, $void),
+            };
+            if ($fits) {
+                return true;
+            }
+        }
 
-        return match ($item->getAllowedRotation()) {
-            Rotation::Never => $w <= $void->width && $l <= $void->length && $d <= $void->depth,
-            Rotation::KeepFlat => ($w <= $void->width && $l <= $void->length && $d <= $void->depth)
-                || ($l <= $void->width && $w <= $void->length && $d <= $void->depth),
-            Rotation::BestFit => $this->bestFitMayFitInVoid($w, $l, $d, $void),
-        };
+        return false;
     }
 
     private function bestFitMayFitInVoid(int $w, int $l, int $d, VoidSpace $void): bool
@@ -595,7 +644,7 @@ class VolumePacker implements LoggerAwareInterface
         foreach ($oldLayers as $originalLayer) {
             $newLayer = new PackedLayer();
             foreach ($originalLayer->items as $item) {
-                $packedItem = new PackedItem($item->item, $item->y, $item->x, $item->z, $item->length, $item->width, $item->depth);
+                $packedItem = new PackedItem($item->item, $item->y, $item->x, $item->z, $item->length, $item->width, $item->depth, state: $item->state);
                 $newLayer->insert($packedItem);
             }
             $newLayers[] = $newLayer;

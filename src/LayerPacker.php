@@ -67,6 +67,14 @@ class LayerPacker implements LoggerAwareInterface
     }
 
     /**
+     * Whether items may be placed in their states (see {@see ReshapableItem}) as well as in their own shape.
+     */
+    public function setUseStates(bool $useStates): void
+    {
+        $this->orientatedItemFactory->setUseStates($useStates);
+    }
+
+    /**
      * Pack items into an individual vertical layer.
      */
     public function packLayer(ItemList &$items, PackedItemList $packedItemList, int $startX, int $startY, int $startZ, int $widthForLayer, int $lengthForLayer, int $depthForLayer, int $guidelineLayerDepth, bool $considerStability, ?OrientatedItem $firstItem): PackedLayer

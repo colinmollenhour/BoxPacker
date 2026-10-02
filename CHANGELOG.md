@@ -17,6 +17,22 @@
   box any other way is turned about the vertical axis just enough to fit, so that a box a little too small for it can
   still be used. Identical angled items nest side by side and other items fill the empty corners beside them.
   `PackedItem` gains `angle`, `boundingWidth`, `boundingLength` and `isAngled()`
+- Soft packing. `SoftPack` (a mailer, envelope or bag described by its flat size, seam and closure losses, maximum
+  fill thickness and wrap factor) and `Packer::addSoftPack()`: on each packing the pack is tried as a box
+  (`SoftPackAsBox`) at every thickness the order could fill it to, so boxes and soft packs are chosen between in one
+  go. `PackedBox::getOuterDimensions()` gives the parcel's outside size as a carrier would measure it (a soft pack as
+  filled)
+- `ReshapableItem` and `ItemState`: items that can be packed in alternative shapes (folded differently, rolled,
+  compressed), used only where packing in their own shape would leave items out. The state an item was packed in is
+  on the `PackedItem` (`state`) and in the JSON output
+- `Protection` levels (`None`, `Padded`, `Rigid`), `ProtectedItem` for items that need a minimum level and
+  `ProtectiveBox` for boxes that offer less than rigid; an item is never packed into a container that cannot protect
+  it
+- `RightSizeBox` for boxes made to the size of their contents, measured as made
+- `DimensionalWeightCostCalculator` (billable weight from outer dimensions, with per-dimension rounding and a bulge
+  allowance) and `FormatCostCalculator` with `ParcelFormat` (letter, large letter, flat-rate envelope and parcel
+  bands), so the Thorough strategy can keep parcels within cheaper postal formats
+- `Rotation::permutations()`
 
 ### Changed
 - Release archives (and so `composer require` with a dist install) now contain only `src/`, `composer.json` and the

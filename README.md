@@ -20,6 +20,8 @@ planning.
   more volume on the published container loading benchmarks and can minimise your shipping cost
 * Your own Item/Box objects (no wrapper DTOs)
 * Rotation: any way up, keep-flat, or none
+* Soft packs (mailers, envelopes, bags) chosen alongside boxes, items that can be folded, rolled or compressed to
+  fit, protection levels, right-size boxes, and postal-format and dimensional-weight cost calculators
 * Weight limits and automatic weight balancing across cartons
 * Limited box stock, linked items, custom placement rules
 * Packed x/y/z coordinates and a 3D visualiser

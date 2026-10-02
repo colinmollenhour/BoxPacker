@@ -29,6 +29,8 @@ class OrientatedItemFactory implements LoggerAwareInterface
 
     protected bool $boxIsRotated = false;
 
+    protected bool $useStates = true;
+
     /**
      * Cached X/Y-swapped packed context for ConstrainedPlacementItem when the box is tried rotated.
      * Invalidated when the source list identity or item count changes (list only grows via insert).
@@ -62,6 +64,14 @@ class OrientatedItemFactory implements LoggerAwareInterface
     public function setBoxIsRotated(bool $boxIsRotated): void
     {
         $this->boxIsRotated = $boxIsRotated;
+    }
+
+    /**
+     * Whether items may be placed in their states (see {@see ReshapableItem}) as well as in their own shape.
+     */
+    public function setUseStates(bool $useStates): void
+    {
+        $this->useStates = $useStates;
     }
 
     /**
@@ -133,9 +143,9 @@ class OrientatedItemFactory implements LoggerAwareInterface
 
         // remove any that simply don't fit
         $orientations = [];
-        foreach ($permutations as $dimensions) {
-            if ($dimensions[0] <= $widthLeft && $dimensions[1] <= $lengthLeft && $dimensions[2] <= $depthLeft) {
-                $orientations[] = new OrientatedItem($item, $dimensions[0], $dimensions[1], $dimensions[2]);
+        foreach ($permutations as [$width, $length, $depth, $state]) {
+            if ($width <= $widthLeft && $length <= $lengthLeft && $depth <= $depthLeft) {
+                $orientations[] = new OrientatedItem($item, $width, $length, $depth, $state);
             }
         }
 
@@ -232,6 +242,7 @@ class OrientatedItemFactory implements LoggerAwareInterface
             $item->getDepth() .
             '|' .
             $item->getAllowedRotation()->name .
+            ($this->useStates ? ItemState::signatureOf($item) : '') .
             '|' .
             $this->box->getInnerWidth() .
             '|' .
@@ -287,7 +298,8 @@ class OrientatedItemFactory implements LoggerAwareInterface
                 $prevPackedItem->z,
                 $prevPackedItem->length,
                 $prevPackedItem->width,
-                $prevPackedItem->depth
+                $prevPackedItem->depth,
+                state: $prevPackedItem->state,
             ));
         }
 
@@ -299,59 +311,34 @@ class OrientatedItemFactory implements LoggerAwareInterface
     }
 
     /**
-     * @return list<array{0: int, 1: int, 2: int}>
+     * The ways the item can be placed, as [width, length, depth, state], in each of its shapes (its own dimensions
+     * with a null state, then its states, see {@see ReshapableItem}).
+     *
+     * @return list<array{0: int, 1: int, 2: int, 3: ?ItemState}>
      */
     private function generatePermutations(Item $item, ?OrientatedItem $prevItem): array
     {
         // Special case items that are the same as what we just packed - keep orientation (if this item may be packed that way)
-        if ($prevItem !== null && $prevItem->isSameDimensions($item) && match ($item->getAllowedRotation()) {
-            Rotation::BestFit => true,
-            Rotation::KeepFlat => $prevItem->depth === $item->getDepth(),
-            Rotation::Never => $prevItem->width === $item->getWidth() && $prevItem->length === $item->getLength() && $prevItem->depth === $item->getDepth(),
-        }) {
-            return [[$prevItem->width, $prevItem->length, $prevItem->depth]];
+        if ($prevItem !== null && $prevItem->isSameDimensions($item) && ($prevItem->state === null || $prevItem->item === $item)) {
+            $state = $prevItem->state;
+            $depth = $state?->depth ?? $item->getDepth();
+            $sameWayRound = match ($state?->getAllowedRotation($item) ?? $item->getAllowedRotation()) {
+                Rotation::BestFit => true,
+                Rotation::KeepFlat => $prevItem->depth === $depth,
+                Rotation::Never => $prevItem->width === ($state?->width ?? $item->getWidth()) && $prevItem->length === ($state?->length ?? $item->getLength()) && $prevItem->depth === $depth,
+            };
+            if ($sameWayRound) {
+                return [[$prevItem->width, $prevItem->length, $prevItem->depth, $state]];
+            }
         }
 
-        $w = $item->getWidth();
-        $l = $item->getLength();
-        $d = $item->getDepth();
-        $rotation = $item->getAllowedRotation();
-
-        if ($rotation === Rotation::Never) {
-            return [[$w, $l, $d]];
+        $permutations = [];
+        foreach (ItemState::shapesOf($item, $this->useStates) as [$w, $l, $d, $rotation, $state]) {
+            foreach ($rotation->permutations($w, $l, $d) as [$width, $length, $depth]) {
+                $permutations[] = [$width, $length, $depth, $state];
+            }
         }
 
-        if ($rotation === Rotation::KeepFlat) {
-            return $w === $l
-                ? [[$w, $l, $d]]
-                : [[$w, $l, $d], [$l, $w, $d]];
-        }
-
-        // BestFit: one placement per distinct assignment of edges to axes
-        if ($w !== $l && $l !== $d && $w !== $d) {
-            return [
-                [$w, $l, $d],
-                [$l, $w, $d],
-                [$w, $d, $l],
-                [$l, $d, $w],
-                [$d, $w, $l],
-                [$d, $l, $w],
-            ];
-        }
-
-        if ($w === $l && $l === $d) {
-            return [[$w, $l, $d]];
-        }
-
-        if ($w === $l) {
-            return [[$w, $l, $d], [$w, $d, $l], [$d, $w, $l]];
-        }
-
-        if ($w === $d) {
-            return [[$w, $l, $d], [$l, $w, $d], [$w, $d, $l]];
-        }
-
-        // $l === $d
-        return [[$w, $l, $d], [$l, $w, $d], [$l, $d, $w]];
+        return $permutations;
     }
 }

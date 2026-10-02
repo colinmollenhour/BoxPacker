@@ -100,11 +100,12 @@ class OrientatedItemSorter
         }
 
         // For slab-like BestFit items, prefer thin edge as depth (KeepFlat-style)
+        $aDimensions = $a->state !== null ? [$a->state->width, $a->state->length, $a->state->depth] : [$a->item->getWidth(), $a->item->getLength(), $a->item->getDepth()];
         if (
-            $a->item->getAllowedRotation() === Rotation::BestFit
-            && self::isSlabLike($a->item)
+            ($a->state?->getAllowedRotation($a->item) ?? $a->item->getAllowedRotation()) === Rotation::BestFit
+            && self::isSlabLike($aDimensions)
         ) {
-            $thin = min($a->item->getWidth(), $a->item->getLength(), $a->item->getDepth());
+            $thin = min($aDimensions);
             $slabDecider = ($b->depth === $thin) <=> ($a->depth === $thin);
             if ($slabDecider !== 0) {
                 return $slabDecider;
@@ -186,10 +187,11 @@ class OrientatedItemSorter
 
     /**
      * Whether the item has one edge much shorter than the longest.
+     *
+     * @param array{0: int, 1: int, 2: int} $dims
      */
-    private static function isSlabLike(Item $item): bool
+    private static function isSlabLike(array $dims): bool
     {
-        $dims = [$item->getWidth(), $item->getLength(), $item->getDepth()];
         sort($dims);
         if ($dims[2] === 0) {
             return false; // avoid divide by zero
@@ -259,7 +261,8 @@ class OrientatedItemSorter
                 '|' .
                 $itemToPack->getWeight() .
                 '|' .
-                $itemToPack->getAllowedRotation()->name;
+                $itemToPack->getAllowedRotation()->name .
+                ItemState::signatureOf($itemToPack);
         }
 
         if (!isset(static::$lookaheadCache[$cacheKey])) {
