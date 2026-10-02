@@ -13,6 +13,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 use function hrtime;
+use function is_finite;
 use function max;
 use function min;
 
@@ -25,6 +26,11 @@ use function min;
 class VolumePackerFactory
 {
     /**
+     * Time budgets longer than this (about three years), or not finite, count as no budget.
+     */
+    private const MAX_TIME_BUDGET = 1e8;
+
+    /**
      * Point (hrtime, ns) at which the time budget runs out, null if there is no budget.
      */
     private readonly ?int $deadline;
@@ -32,6 +38,10 @@ class VolumePackerFactory
     private ?float $callTimeLimit = null;
 
     private ?int $callBudget = null;
+
+    private int $searchPlacements = 0;
+
+    private int $searchesCutShort = 0;
 
     /**
      * @param ?float $timeBudget total wall-clock seconds for the run (Thorough strategy only), starting now
@@ -45,8 +55,11 @@ class VolumePackerFactory
         private readonly LoggerInterface $logger = new NullLogger(),
         private readonly bool $beStrictAboutItemOrdering = false,
         private readonly bool $allowAngledPlacement = false,
+        private readonly ?TimeoutChecker $timeoutChecker = null,
     ) {
-        $this->deadline = $timeBudget === null ? null : hrtime(true) + (int) (max(0.0, $timeBudget) * 1e9);
+        $this->deadline = $timeBudget === null || !is_finite($timeBudget) || $timeBudget > self::MAX_TIME_BUDGET
+            ? null
+            : hrtime(true) + (int) (max(0.0, $timeBudget) * 1e9);
     }
 
     public function create(Box $box, ItemList $items): VolumePacker
@@ -54,6 +67,8 @@ class VolumePackerFactory
         $volumePacker = new VolumePacker($box, $items);
         $volumePacker->setLogger($this->logger);
         $volumePacker->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
+        $volumePacker->setTimeoutChecker($this->timeoutChecker);
+        $volumePacker->setSearchListener($this->recordSearch(...));
         if ($this->allowAngledPlacement) {
             $volumePacker->setAllowAngledPlacement(true);
             $volumePacker->setMinimumSupport($this->minimumSupport);
@@ -63,7 +78,7 @@ class VolumePackerFactory
             $volumePacker->setStrategy($this->strategy);
             $volumePacker->setMaxBeamWidth($this->maxBeamWidth);
             $volumePacker->setMinimumSupport($this->minimumSupport);
-            $volumePacker->setSearchBudget($this->callBudget === null || $this->searchBudget === null ? $this->searchBudget ?? $this->callBudget : min($this->searchBudget, $this->callBudget));
+            $volumePacker->setSearchBudget($this->getCallSearchBudget());
             $volumePacker->setSearchTimeLimit($this->getSearchTimeLimit());
         }
 
@@ -84,6 +99,46 @@ class VolumePackerFactory
     public function setCallBudget(?int $placements): void
     {
         $this->callBudget = $placements;
+    }
+
+    public function resetCallLimits(): void
+    {
+        $this->callBudget = null;
+        $this->callTimeLimit = null;
+    }
+
+    /**
+     * The search budget each VolumePacker created now gets (null = no cap).
+     */
+    public function getCallSearchBudget(): ?int
+    {
+        if ($this->callBudget === null || $this->searchBudget === null) {
+            return $this->searchBudget ?? $this->callBudget;
+        }
+
+        return min($this->searchBudget, $this->callBudget);
+    }
+
+    /**
+     * Trial placements made by the block searches of all the VolumePackers created so far.
+     */
+    public function getSearchPlacements(): int
+    {
+        return $this->searchPlacements;
+    }
+
+    /**
+     * Number of those searches that were cut short by their budget or time limit.
+     */
+    public function getSearchesCutShort(): int
+    {
+        return $this->searchesCutShort;
+    }
+
+    private function recordSearch(int $placements, bool $cutShort): void
+    {
+        $this->searchPlacements += $placements;
+        $this->searchesCutShort += $cutShort ? 1 : 0;
     }
 
     public function allowsAngledPlacement(): bool
@@ -114,7 +169,10 @@ class VolumePackerFactory
         return $this->deadline !== null && hrtime(true) >= $this->deadline;
     }
 
-    private function getSearchTimeLimit(): ?float
+    /**
+     * The search time limit each VolumePacker created now gets (null = no limit).
+     */
+    public function getSearchTimeLimit(): ?float
     {
         $remaining = $this->getRemainingTime();
         if ($remaining === null) {

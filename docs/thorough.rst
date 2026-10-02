@@ -45,12 +45,15 @@ less the part of the surrounding gap that the remaining items could never fill.
 On its own that greedy procedure is already good; a *beam search* then explores alternatives. Each partial packing is
 scored by greedily completing it, the most promising few are expanded further, and the search is repeated with an
 ever-wider beam (1, 2, 4, 8 ...) until the effort budget or the maximum width is reached. The best complete packing
-found is returned. For orders of up to 40 items the fast packer is run as well and the denser result kept, so on
-those ``Thorough`` never packs less volume than ``Fast`` would (support rules permitting); on larger loads the search
-is consistently the denser of the two, so only it is run.
+found is returned. For up to 40 items, if the search leaves some out, the fast packer is run as well and the denser
+result kept, so on those ``Thorough`` never packs less volume than ``Fast`` would (support rules permitting); on larger
+loads the search is consistently the denser of the two, so only it is run.
 
 Everything the fast packer honours is honoured: allowed rotations (``Rotation::Never``, ``KeepFlat``, ``BestFit``),
-the preference for stable orientations, box weight limits, and ``ConstrainedPlacementItem`` callbacks.
+the preference for stable orientations, box weight limits, and ``ConstrainedPlacementItem`` callbacks. Callbacks are
+asked about each item of a block in turn; if one refuses part of the way through, the part of the block before it is
+tried instead. A space where every block was refused is set aside, and offered again once there is nothing else to
+fill, in case a callback that depends on what is already in the box now accepts.
 
 Choosing the boxes
 ------------------
@@ -69,7 +72,13 @@ large to share a box). Box quantity limits, linked items and placement callbacks
 redistribution (see :doc:`weight-distribution`) still runs afterwards, but its result is only kept if it does not
 make the boxes more numerous or more expensive.
 
-By default the thorough strategy minimises the number of boxes, and then their total inner volume.
+For orders of up to 200 items the fast packer packs the order as well, and its boxes are used instead if they leave
+fewer items unpacked, or as many but fewer or cheaper boxes, provided every item in them is supported well enough
+(see `Support`_).
+
+By default the thorough strategy minimises the number of boxes, and then their total inner volume. It chooses the boxes
+by this objective alone: a ``BoxSorter`` or ``PackedBoxSorter`` (see :doc:`sortation`) only orders the boxes it
+returns. To steer the choice of boxes, use a cost calculator.
 
 Minimising cost
 ^^^^^^^^^^^^^^^
@@ -98,6 +107,8 @@ cheap boxes rather than one large expensive one when that is cheaper.
         $packer->setCostCalculator(new ShippingCost());
 
 The cost of a box should never go down when items are added to it (the cost of an empty box is used as a lower bound).
+Setting any cost calculator puts cost first, even ``DefaultPackedBoxCostCalculator`` (which treats a box's inner volume
+as its cost, as the default objective does when choosing between the same number of boxes).
 
 Support
 -------
@@ -111,9 +122,12 @@ pallets) or less (``0.0`` places no requirement at all, like the fast packer):
     <?php
         $volumePacker->setMinimumSupport(1.0);
 
-Stricter support costs density. On the bookshop order corpus, requiring 75% support instead of 50% costs about 0.5%
-more cartons; on very mixed container loads, requiring full support costs several percentage points of utilisation,
-as it is much harder to build flat surfaces from items of many different heights.
+Support is part of what the thorough strategy optimises, and it costs density. Even the default does: packed in 3D, the
+4,288 bookshop orders need 4,560 cartons with 50% support but 4,547 with none, and the fast packer (which has no
+support rule) uses 4,557, so with the default the thorough strategy uses a few more cartons than ``Fast`` there, though
+smaller ones. Requiring 75% support instead of 50% costs about 0.5% more cartons; on very mixed container loads,
+requiring full support costs several percentage points of utilisation, as it is much harder to build flat surfaces from
+items of many different heights.
 
 Effort and run time
 -------------------
@@ -121,20 +135,30 @@ Effort and run time
 Three settings control how hard the thorough strategy works:
 
 ``setSearchBudget(?int $placements)``
-    The maximum number of trial block placements the search may make (default 10,000). This is a deterministic proxy
-    for time - the same inputs always give the same result, whatever the machine. Small orders usually finish well
+    The number of trial block placements after which the search starts no new work (default 10,000); ``null`` means no
+    cap, leaving only the beam width to bound the search. The first greedy pass always runs to the end, so that there
+    is a complete packing, and a step in progress may run on to twice the budget. The budget makes effort
+    deterministic - the same inputs always give the same result, whatever the machine - but it is not a time limit:
+    each placement takes longer the more different items there are to choose from. Small orders usually finish well
     within it; large mixed loads use all of it.
 
 ``setMaxBeamWidth(int $width)``
     The widest beam to try (default 16). Each doubling roughly quadruples the effort.
 
 ``setSearchTimeLimit(?float $seconds)``
-    An optional wall-clock limit. When reached, the best packing found so far is used. Note that results then depend
-    on machine speed and load.
+    An optional wall-clock limit, the way to bound run time. When reached, the best packing found so far is used (the
+    first greedy pass is always completed), and for up to 40 items the fast packer is no longer tried as well. Note
+    that results then depend on machine speed and load.
 
-The same settings are available on ``Packer``, where the budget applies to each box packing. There, a time limit is a
-limit for the whole of ``pack()``, shared between filling the boxes and searching for better ones; the boxes are always
-completed.
+The same settings are available on ``Packer``. There, no box packing gets more than the budget, but most get a share
+of it: while ``k`` more boxes are needed (by volume) for the first solution, each box gets ``1/k`` of the budget (but at
+least a tenth), each attempt to improve the solution gets a tenth, and the whole improvement phase may use twice the
+budget. Weight redistribution then repacks boxes with a tenth of the budget each. A time limit is a limit for the
+whole of ``pack()``, shared between filling the boxes and searching for better ones; the boxes are always completed,
+but once the time is up the fast packer's packing is not tried as well and the weight is not redistributed.
+
+A ``TimeoutChecker`` (``Packer::setTimeoutChecker()``) is checked during each box's search too, not only between box
+packings, so it can interrupt a long search. If it does, the items and box quantities are left as they were.
 
 As a guide, with the defaults on PHP 8.4 a typical e-commerce order is packed in about 10 milliseconds; container loads
 of 100-150 items of 3-20 types take around 0.1-0.6 seconds, and of 30-100 types 0.7-1.5 seconds. Large multi-box
@@ -145,3 +169,6 @@ Things the thorough strategy does not do
 
 ``beStrictAboutItemOrdering()`` and ``packAcrossWidthOnly()`` describe a particular loading sequence, which the block
 search does not follow. When either is set, the fast packer is used.
+
+A ``BoxSorter`` or ``PackedBoxSorter`` does not decide which boxes are used, only the order they are returned in (see
+`Choosing the boxes`_).

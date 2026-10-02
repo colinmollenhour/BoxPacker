@@ -9,9 +9,12 @@
   With `Packer`, the thorough strategy also searches for fewer and cheaper boxes (merging boxes, emptying boxes into
   others, repacking into cheaper box types)
 - `setMaxBeamWidth()`, `setSearchBudget()`, `setSearchTimeLimit()` and `setMinimumSupport()` on `Packer` and
-  `VolumePacker` to control the thorough strategy's effort and how well each item must be supported from below
-- `PackedBoxCostCalculator` and `Packer::setCostCalculator()` so the thorough strategy can minimise shipping cost
-  rather than the number and size of boxes
+  `VolumePacker` to control the thorough strategy's effort and how well each item must be supported from below.
+  `setSearchBudget(null)` means no cap on trial placements (only the beam width then bounds the search)
+- `PackedBoxCostCalculator`, `DefaultPackedBoxCostCalculator` and `Packer::setCostCalculator()` so the thorough strategy
+  can minimise shipping cost rather than the number and size of boxes. Setting any cost calculator makes cost the
+  first objective. The thorough strategy chooses boxes by number and cost; a `BoxSorter` or `PackedBoxSorter` only
+  orders the boxes returned
 - `bin/benchmark`, a repeatable benchmark harness over the published test sets and the bookshop order corpus
 - Angled placement, enabled with `setAllowAngledPlacement(true)` on `Packer` or `VolumePacker`: an item too long to fit a
   box any other way is turned about the vertical axis just enough to fit, so that a box a little too small for it can
@@ -24,6 +27,10 @@
 
 ### Fixed
 - `VolumePacker::pack()` no longer fails when given an empty item list
+- The fast strategy no longer gives a `KeepFlat` or `Never`-rotation item the orientation of a preceding item of the
+  same size when that orientation is not allowed for it
+- `Packer::pack()` no longer fails with an `Error` when the boxes were passed to the `Packer` constructor rather than
+  added with `addBox()` or `setBoxes()`
 
 ## [4.3.0] - 2026-08-09
 ### Changed

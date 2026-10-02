@@ -9,22 +9,26 @@ declare(strict_types=1);
 
 namespace DVDoug\BoxPacker;
 
-use DVDoug\BoxPacker\Exception\NoBoxesAvailableException;
+use Generator;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 use Psr\Log\NullLogger;
+use SplMinHeap;
 use WeakMap;
 
 use function abs;
+use function array_keys;
 use function array_values;
 use function ceil;
 use function count;
+use function hash;
 use function implode;
 use function intdiv;
 use function ksort;
 use function iterator_to_array;
 use function max;
+use function min;
 use function sort;
 use function spl_object_id;
 use function usort;
@@ -47,7 +51,9 @@ use const PHP_INT_MAX;
  * would fit into one box between cheaper ones, and the better of the two is kept.
  *
  * Search effort is bounded by the time budget of the VolumePackerFactory if it has one, otherwise by a number of
- * single-box packings proportional to the number of boxes (so results are deterministic).
+ * single-box packings proportional to the number of boxes and by twice the search budget in trial placements (so
+ * results are deterministic). Each single-box packing gets a share of the search budget, see budgetConstruction()
+ * and improve().
  *
  * @internal
  */
@@ -117,11 +123,17 @@ class ThoroughPacker implements LoggerAwareInterface
     private WeakMap $costs;
 
     /**
-     * Packings already made: "box id|sorted item ids" => packed box.
+     * Packings already made, by a digest of the box and items: the packed box, the search budget and time limit it
+     * was made with, and whether its search was cut short by them.
      *
-     * @var array<string, PackedBox>
+     * @var array<string, array{0: PackedBox, 1: ?int, 2: ?float, 3: bool}>
      */
     private array $packCache = [];
+
+    /**
+     * The order's item list, whose sorter every list made for a single-box packing uses.
+     */
+    private ItemList $itemTemplate;
 
     private bool $improving = false;
 
@@ -167,25 +179,45 @@ class ThoroughPacker implements LoggerAwareInterface
     }
 
     /**
-     * Pack the items into boxes. Packed items are removed from $items, leaving any that could not be packed.
+     * Pack the items into boxes. Once the packing is complete, packed items are removed from $items (leaving any that
+     * could not be packed) and the boxes used are taken from the quantities available; if packing fails part way
+     * through, neither changes.
      *
      * @return list<PackedBox>
      */
-    public function pack(ItemList $items, bool $throwOnUnpackableItem): array
+    public function pack(ItemList $items): array
     {
         $this->initialiseBoxTypes();
+        $this->itemTemplate = $items;
 
-        $solution = $this->minimiseCostFirst
-            ? $this->packByVolumeAndByValue($items, $throwOnUnpackableItem)
-            : $this->constructAndImprove($items, $throwOnUnpackableItem);
+        try {
+            $solution = $this->minimiseCostFirst
+                ? $this->packByVolumeAndByValue($items)
+                : $this->constructAndImprove(clone $items);
+        } finally {
+            $this->volumePackerFactory->resetCallLimits();
+        }
 
+        foreach ($solution as $packedBox) {
+            $items->removePackedItems($packedBox->items);
+        }
         foreach ($this->boxTypes as $box) {
             $this->boxQuantitiesAvailable[$box] = $this->available[spl_object_id($box)];
         }
-        $this->volumePackerFactory->setCallBudget(null);
-        $this->volumePackerFactory->setCallTimeLimit(null);
 
         return $solution;
+    }
+
+    /**
+     * Limit the effort of single-box packings made from now on (by weight redistribution after pack()) to that of an
+     * attempted improvement.
+     */
+    public function limitEffortForRepacking(): void
+    {
+        $searchBudget = $this->volumePackerFactory->getSearchBudget();
+        $this->volumePackerFactory->setCallBudget($searchBudget === null ? null : intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR));
+        $remaining = $this->volumePackerFactory->getRemainingTime();
+        $this->volumePackerFactory->setCallTimeLimit($remaining === null ? null : $remaining / 10);
     }
 
     /**
@@ -217,7 +249,7 @@ class ThoroughPacker implements LoggerAwareInterface
         $sortable = [];
         foreach ($this->boxes as $order => $box) {
             $id = spl_object_id($box);
-            $quantity = $this->boxQuantitiesAvailable[$box] ?? 0;
+            $quantity = $this->boxQuantitiesAvailable[$box];
             if ($quantity <= 0 || $box->getMaxWeight() < $box->getEmptyWeight()) {
                 continue;
             }
@@ -239,21 +271,21 @@ class ThoroughPacker implements LoggerAwareInterface
     /**
      * Minimising cost first: fill boxes by the most volume, and separately by the most volume per unit of cost, and
      * keep the better result. Neither is reliably better: filling by value can split an order between several cheap
-     * boxes, but it can also leave the search stuck with more boxes than it needs. Packed items are removed from $items.
+     * boxes, but it can also leave the search stuck with more boxes than it needs. $items is left unchanged.
      *
      * @return list<PackedBox>
      */
-    private function packByVolumeAndByValue(ItemList $items, bool $throwOnUnpackableItem): array
+    private function packByVolumeAndByValue(ItemList $items): array
     {
         $available = $this->available;
         $byVolumeLeft = clone $items;
-        $byVolume = $this->constructAndImprove($byVolumeLeft, $throwOnUnpackableItem);
+        $byVolume = $this->constructAndImprove($byVolumeLeft);
         $byVolumeAvailable = $this->available;
 
         $this->available = $available;
         $this->fillByValue = true;
         $byValueLeft = clone $items;
-        $byValue = $this->constructAndImprove($byValueLeft, false);
+        $byValue = $this->constructAndImprove($byValueLeft);
         $this->fillByValue = false;
 
         $useByValue = $byValueLeft->count() < $byVolumeLeft->count()
@@ -262,12 +294,7 @@ class ThoroughPacker implements LoggerAwareInterface
             $this->available = $byVolumeAvailable;
         }
 
-        $solution = $useByValue ? $byValue : $byVolume;
-        foreach ($solution as $packedBox) {
-            $items->removePackedItems($packedBox->items);
-        }
-
-        return $solution;
+        return $useByValue ? $byValue : $byVolume;
     }
 
     /**
@@ -275,15 +302,16 @@ class ThoroughPacker implements LoggerAwareInterface
      *
      * @return list<PackedBox>
      */
-    private function constructAndImprove(ItemList $items, bool $throwOnUnpackableItem): array
+    private function constructAndImprove(ItemList $items): array
     {
-        $solution = $this->construct($items, $throwOnUnpackableItem);
+        $solution = $this->construct($items);
         $availableAfterConstruction = $this->available;
         $this->improve($solution);
 
         // improvement may have freed up boxes of a type that had run out, so try again with anything left over
         if ($items->count() > 0 && $this->anyBoxTypeFreed($availableAfterConstruction)) {
-            $extra = $this->construct($items, false);
+            $this->logger->log(LogLevel::DEBUG, "Packing {$items->count()} items left over into boxes freed up by the improvements");
+            $extra = $this->construct($items);
             if ($extra !== []) {
                 $solution = [...$solution, ...$extra];
                 $this->improve($solution);
@@ -294,13 +322,14 @@ class ThoroughPacker implements LoggerAwareInterface
     }
 
     /**
-     * Greedy construction: fill one box at a time until everything is packed, or nothing more can be.
+     * Greedy construction: fill one box at a time until everything is packed, or nothing more can be. Packed items are
+     * removed from $items.
      *
      * @param bool $lookAhead when filling by value: check whether splitting what fits in one box is cheaper
      *
      * @return list<PackedBox>
      */
-    private function construct(ItemList $items, bool $throwOnUnpackableItem, bool $lookAhead = true): array
+    private function construct(ItemList $items, bool $lookAhead = true): array
     {
         $packedBoxes = [];
 
@@ -318,11 +347,7 @@ class ThoroughPacker implements LoggerAwareInterface
             }
 
             if ($chosen === null) {
-                if ($throwOnUnpackableItem) {
-                    throw new NoBoxesAvailableException("No boxes could be found for item '{$items->top()->getDescription()}'", $items);
-                }
-                $this->logger->log(LogLevel::INFO, "{$items->count()} unpackable items found");
-                break;
+                break; // the Packer reports what is left over once it has the final solution
             }
 
             $items->removePackedItems($chosen->items);
@@ -474,7 +499,7 @@ class ThoroughPacker implements LoggerAwareInterface
 
         $available = $this->available;
         --$this->available[spl_object_id($partial->box)];
-        $completion = $this->construct($rest, false, false);
+        $completion = $this->construct($rest, false);
         $this->available = $available;
 
         if ($rest->count() > 0) {
@@ -498,16 +523,20 @@ class ThoroughPacker implements LoggerAwareInterface
             return;
         }
 
+        // with a time budget, time bounds the improvement phase; each attempt still gets a tenth of the search budget
+        $hasTimeBudget = $this->volumePackerFactory->hasTimeBudget();
         $this->improving = true;
         $this->improvementPackings = 0;
-        $this->maxImprovementPackings = $this->volumePackerFactory->hasTimeBudget()
+        $this->maxImprovementPackings = $hasTimeBudget
             ? PHP_INT_MAX
             : max(self::MIN_IMPROVEMENT_PACKINGS, self::IMPROVEMENT_PACKINGS_PER_BOX * count($solution));
         $remaining = $this->volumePackerFactory->getRemainingTime();
         $this->volumePackerFactory->setCallTimeLimit($remaining === null ? null : $remaining / 10);
         $searchBudget = $this->volumePackerFactory->getSearchBudget();
         $this->improvementPlacements = 0;
-        $this->maxImprovementPlacements = $searchBudget === null ? PHP_INT_MAX : self::IMPROVEMENT_BUDGET_FACTOR * $searchBudget;
+        $this->maxImprovementPlacements = $searchBudget === null || $hasTimeBudget || $searchBudget > intdiv(PHP_INT_MAX, self::IMPROVEMENT_BUDGET_FACTOR)
+            ? PHP_INT_MAX
+            : self::IMPROVEMENT_BUDGET_FACTOR * $searchBudget;
         $this->volumePackerFactory->setCallBudget($searchBudget === null ? null : intdiv($searchBudget, self::IMPROVEMENT_BUDGET_DIVISOR));
 
         $lowerBound = $this->lowerBound($solution);
@@ -528,20 +557,20 @@ class ThoroughPacker implements LoggerAwareInterface
      */
     private function mergePairs(array &$solution): bool
     {
-        $pairs = [];
-        $count = count($solution);
-        for ($i = 0; $i < $count; ++$i) {
-            for ($j = $i + 1; $j < $count; ++$j) {
-                $volume = $solution[$i]->getUsedVolume() + $solution[$j]->getUsedVolume();
-                $weight = $solution[$i]->getItemWeight() + $solution[$j]->getItemWeight();
-                if ($volume <= $this->maxVolume && $weight <= $this->maxCapacity) {
-                    $pairs[] = [$volume, $i, $j];
-                }
-            }
+        if (!$this->canContinue()) {
+            return false;
         }
-        sort($pairs);
 
-        foreach ($pairs as [, $i, $j]) {
+        $volumes = $weights = [];
+        foreach ($solution as $index => $packedBox) {
+            $volumes[$index] = $packedBox->getUsedVolume();
+            $weights[$index] = $packedBox->getItemWeight();
+        }
+
+        foreach (self::pairsBySum($volumes, $this->maxVolume) as [$i, $j]) {
+            if ($weights[$i] + $weights[$j] > $this->maxCapacity) {
+                continue;
+            }
             if (!$this->canContinue()) {
                 return false;
             }
@@ -715,22 +744,18 @@ class ThoroughPacker implements LoggerAwareInterface
      */
     private function repackPairs(array &$solution): bool
     {
-        if (count($this->boxTypes) < 2 || count($solution) < 2) {
+        if (count($this->boxTypes) < 2 || count($solution) < 2 || !$this->canContinue()) {
             return false;
         }
 
         $cheapest = $this->emptyCosts[spl_object_id($this->boxTypes[0])];
-        $pairs = [];
-        $count = count($solution);
-        for ($i = 0; $i < $count; ++$i) {
-            for ($j = $i + 1; $j < $count; ++$j) {
-                $pairs[] = [-($this->cost($solution[$i]) + $this->cost($solution[$j])), $i, $j];
-            }
+        $negativeCosts = [];
+        foreach ($solution as $index => $packedBox) {
+            $negativeCosts[$index] = -$this->cost($packedBox);
         }
-        sort($pairs);
 
-        foreach ($pairs as [$negativeCost, $i, $j]) {
-            $oldCost = -$negativeCost;
+        foreach (self::pairsBySum($negativeCosts) as [$i, $j]) {
+            $oldCost = $this->cost($solution[$i]) + $this->cost($solution[$j]);
             $pair = [$solution[$i], $solution[$j]];
             $items = [...$pair[0]->items->asItemArray(), ...$pair[1]->items->asItemArray()];
             foreach ($this->boxTypes as $box) {
@@ -831,7 +856,8 @@ class ThoroughPacker implements LoggerAwareInterface
     }
 
     /**
-     * Pack the items into the box, keeping linked item groups together. Results are cached.
+     * Pack the items into the box, keeping linked item groups together. Results are cached, and a cached packing is
+     * reused unless its search was cut short with less effort than is available now.
      *
      * @param list<Item> $items
      */
@@ -842,9 +868,20 @@ class ThoroughPacker implements LoggerAwareInterface
             $ids[] = spl_object_id($item);
         }
         sort($ids);
-        $key = spl_object_id($box) . '|' . implode(',', $ids);
+        $key = hash('xxh128', spl_object_id($box) . '|' . implode(',', $ids));
+        $budget = $this->volumePackerFactory->getCallSearchBudget();
+        $timeLimit = $this->volumePackerFactory->getSearchTimeLimit();
         if (isset($this->packCache[$key])) {
-            return $this->packCache[$key];
+            [$cached, $cachedBudget, $cachedTimeLimit, $cutShort] = $this->packCache[$key];
+            if (!$cutShort || (($cachedBudget === null || ($budget !== null && $budget <= $cachedBudget)) && ($cachedTimeLimit === null || ($timeLimit !== null && $timeLimit <= $cachedTimeLimit)))) {
+                // a box of its own, as identical items packed the same way may be wanted twice
+                $packedBox = new PackedBox($cached->box, clone $cached->items);
+                if (isset($this->costs[$cached])) {
+                    $this->costs[$packedBox] = $this->costs[$cached];
+                }
+
+                return $packedBox;
+            }
         }
 
         $this->timeoutChecker?->throwOnTimeout();
@@ -852,20 +889,23 @@ class ThoroughPacker implements LoggerAwareInterface
             ++$this->improvementPackings;
         }
 
-        $itemList = ItemList::fromArray($items);
-        $volumePacker = $this->volumePackerFactory->create($box, $itemList);
-        $packedBox = $volumePacker->pack();
-        if ($this->improving) {
-            $this->improvementPlacements += $volumePacker->getSearchPlacements();
-        }
+        // the effort of every search made for this packing, including the linked item group enforcer's repacks
+        $placementsBefore = $this->volumePackerFactory->getSearchPlacements();
+        $cutShortBefore = $this->volumePackerFactory->getSearchesCutShort();
+        $itemList = $this->itemTemplate->withItems($items);
+        $packedBox = $this->volumePackerFactory->create($box, $itemList)->pack();
         if ($itemList->hasLinkedItems()) {
             $linkedItemGroupEnforcer = new LinkedItemGroupEnforcer();
             $linkedItemGroupEnforcer->setLogger($this->logger);
             $linkedItemGroupEnforcer->setVolumePackerFactory($this->volumePackerFactory);
             $packedBox = $linkedItemGroupEnforcer->enforceConstraint($packedBox, $itemList);
         }
+        if ($this->improving) {
+            $this->improvementPlacements += $this->volumePackerFactory->getSearchPlacements() - $placementsBefore;
+        }
+        $this->packCache[$key] = [$packedBox, $budget, $timeLimit, $this->volumePackerFactory->getSearchesCutShort() > $cutShortBefore];
 
-        return $this->packCache[$key] = $packedBox;
+        return $packedBox;
     }
 
     /**
@@ -887,7 +927,7 @@ class ThoroughPacker implements LoggerAwareInterface
             }
         }
 
-        $byVolume = (int) ceil($volume / $this->maxVolume);
+        $byVolume = $this->maxVolume > 0 ? (int) ceil($volume / $this->maxVolume) : 0;
         $byWeight = $this->maxCapacity > 0 ? (int) ceil($weight / $this->maxCapacity) : 0;
 
         return max($byVolume, $byWeight, $bigItems, 1);
@@ -973,6 +1013,48 @@ class ThoroughPacker implements LoggerAwareInterface
     }
 
     /**
+     * Pairs of indexes [i, j] (i < j) in increasing order of $values[i] + $values[j], then of i and j, as if all the
+     * pairs had been sorted, but made one at a time as needed. Pairs whose sum is over $maxSum are left out.
+     *
+     * Each index is paired with those after it in value order, whose sums can only grow, so the next pair overall is
+     * always the smallest of the next pairs of each index.
+     *
+     * @param  array<int, int|float>            $values
+     * @return Generator<array{0: int, 1: int}>
+     */
+    private static function pairsBySum(array $values, int|float $maxSum = INF): Generator
+    {
+        $order = array_keys($values);
+        usort($order, static fn (int $a, int $b) => ($values[$a] <=> $values[$b]) ?: ($a <=> $b));
+        $count = count($order);
+        $next = static function (int $p, int $q) use ($values, $order, $maxSum): ?array {
+            $i = min($order[$p], $order[$q]);
+            $j = max($order[$p], $order[$q]);
+            $sum = $values[$i] + $values[$j];
+
+            return $sum <= $maxSum ? [$sum, $i, $j, $p, $q] : null;
+        };
+
+        $heap = new SplMinHeap();
+        for ($p = 0; $p < $count - 1; ++$p) {
+            $pair = $next($p, $p + 1);
+            if ($pair !== null) {
+                $heap->insert($pair);
+            }
+        }
+        while (!$heap->isEmpty()) {
+            [, $i, $j, $p, $q] = $heap->extract();
+            yield [$i, $j];
+            if ($q + 1 < $count) {
+                $pair = $next($p, $q + 1);
+                if ($pair !== null) {
+                    $heap->insert($pair);
+                }
+            }
+        }
+    }
+
+    /**
      * @param  list<Item>            $items
      * @return array{0: int, 1: int} [volume, weight]
      */
@@ -1030,9 +1112,10 @@ class ThoroughPacker implements LoggerAwareInterface
     }
 
     /**
-     * Share out the search effort for the next box of the construction: while several more boxes are needed, each gets
-     * a proportional share of the search budget, and with a time budget, a share of the time left (keeping half back
-     * for the improvement phase).
+     * Share out the search effort for the next box of the construction. While k more boxes are needed (by volume),
+     * each packing gets 1/k of the search budget, but at least a tenth of it; the whole budget once only one box is
+     * needed. With a time budget, each packing gets half the time left divided by the number of packings still to
+     * make (one per box type for each box needed), so that roughly half is left for the improvement phase.
      */
     private function budgetConstruction(ItemList $items): void
     {

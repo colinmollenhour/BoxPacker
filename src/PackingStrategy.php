@@ -23,7 +23,8 @@ enum PackingStrategy: string
     /**
      * Block-building beam search over maximal free spaces. For small loads (up to 40 items per box, 200 per order)
      * the fast packer is also run and its result kept if it is better and meets the support requirement. For
-     * multiple boxes, the box selection is then improved by trying to repack boxes into fewer or cheaper ones.
+     * multiple boxes, the box selection is then improved by trying to repack boxes into fewer or cheaper ones; boxes
+     * are chosen by number and cost (see PackedBoxCostCalculator), not by a BoxSorter or PackedBoxSorter.
      * Slower, but typically packs considerably denser.
      */
     case Thorough = 'thorough';

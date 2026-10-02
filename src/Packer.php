@@ -31,7 +31,8 @@ class Packer implements LoggerAwareInterface
 {
     /**
      * For orders of up to this many items, the Thorough strategy also runs the Fast strategy and keeps its boxes if
-     * they are better, so that Thorough is never worse (support rules permitting).
+     * they are better (fewer items left unpacked, then fewer or cheaper boxes), so that Thorough is never worse
+     * (support rules permitting).
      */
     private const FAST_COMPARISON_LIMIT = 200;
 
@@ -77,9 +78,9 @@ class Packer implements LoggerAwareInterface
         LoggerInterface $logger = new NullLogger(),
     ) {
         $this->items = $items;
-        $this->boxes = $boxes;
         $this->packedBoxSorter = $packedBoxSorter;
         $this->boxQuantitiesAvailable = new WeakMap();
+        $this->setBoxes($boxes);
 
         $this->logger = $logger;
     }
@@ -164,6 +165,9 @@ class Packer implements LoggerAwareInterface
         $this->packedBoxSorter = $packedBoxSorter;
     }
 
+    /**
+     * Checked between box packings, and with the Thorough strategy also during each box's search.
+     */
     public function setTimeoutChecker(TimeoutChecker $timeoutChecker): void
     {
         $this->timeoutChecker = $timeoutChecker;
@@ -182,6 +186,9 @@ class Packer implements LoggerAwareInterface
     /**
      * Fast (original algorithms, the default) or Thorough (denser packing of each box, then a search for fewer and
      * cheaper boxes). Thorough is not used when being strict about item ordering.
+     *
+     * Thorough chooses boxes by its own objective (fewest boxes, then the least total cost, see setCostCalculator()),
+     * so a BoxSorter or PackedBoxSorter does not decide which boxes are used; they only order the boxes returned.
      */
     public function setStrategy(PackingStrategy $strategy): void
     {
@@ -207,7 +214,10 @@ class Packer implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: deterministic cap on the search effort of each box packing, as a number of trial block
-     * placements, see {@see VolumePacker::setSearchBudget()}.
+     * placements, see {@see VolumePacker::setSearchBudget()}. No box packing gets more than this, and most get a share
+     * of it: while k more boxes are needed, each box of the initial solution gets 1/k of it (but at least a tenth),
+     * each attempt to improve the solution gets a tenth, and the whole improvement phase may use twice the budget.
+     * null = no cap.
      */
     public function setSearchBudget(?int $placements): void
     {
@@ -217,7 +227,8 @@ class Packer implements LoggerAwareInterface
     /**
      * Thorough strategy only: optional wall-clock limit in seconds for the whole of pack(), shared between packing
      * the boxes and searching for a better set of boxes. The limit is approximate: the boxes are always completed, with
-     * little search once the time is up. Note that results then depend on machine speed.
+     * little search once the time is up (and the Fast strategy's packing is then not tried as well). Note that results
+     * then depend on machine speed.
      */
     public function setSearchTimeLimit(?float $seconds): void
     {
@@ -235,8 +246,8 @@ class Packer implements LoggerAwareInterface
 
     /**
      * Thorough strategy only: how much a packed box costs. By default, the Thorough strategy minimises the number of
-     * boxes and then their total inner volume. When a cost calculator is set, it instead minimises the total cost of
-     * the boxes, and then their number.
+     * boxes and then their total inner volume. When a cost calculator is set (any calculator, even
+     * DefaultPackedBoxCostCalculator), it instead minimises the total cost of the boxes, and then their number.
      */
     public function setCostCalculator(PackedBoxCostCalculator $costCalculator): void
     {
@@ -286,9 +297,12 @@ class Packer implements LoggerAwareInterface
      */
     private function doThoroughPacking(VolumePackerFactory $volumePackerFactory): PackedBoxList
     {
+        // nothing is taken from the order's items or box quantities until the packing is final, so that a timeout
+        // part way through leaves both as they were
+        $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
         $thoroughPacker = new ThoroughPacker(
             $this->boxes,
-            $this->boxQuantitiesAvailable,
+            $boxQuantitiesAvailable,
             $volumePackerFactory,
             $this->costCalculator ?? new DefaultPackedBoxCostCalculator(),
             $this->costCalculator !== null,
@@ -296,72 +310,99 @@ class Packer implements LoggerAwareInterface
         );
         $thoroughPacker->setLogger($this->logger);
 
+        // both strategies pack copies of the items
         $fastPacker = $this->items->count() <= self::FAST_COMPARISON_LIMIT ? $this->packFastForComparison() : null;
 
+        $thoroughItems = clone $this->items;
         $packedBoxes = new PackedBoxList($this->packedBoxSorter);
-        $packedBoxes->insertFromArray($thoroughPacker->pack($this->items, false));
+        $packedBoxes->insertFromArray($thoroughPacker->pack($thoroughItems));
+        $unpackedItems = $thoroughItems;
 
-        // keep the fast packer's boxes if they are better (and supported well enough)
-        if ($fastPacker !== null) {
+        // keep the fast packer's boxes if they are better (and supported well enough), time permitting
+        if ($fastPacker !== null && !$volumePackerFactory->isOutOfTime()) {
             $fastBoxes = $fastPacker->doBasicPacking();
             $fastIsSupported = true;
             foreach ($fastBoxes as $fastBox) {
-                $fastIsSupported = $fastIsSupported
-                    && $fastBox->getWeight() <= $fastBox->box->getMaxWeight()
-                    && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
+                $fastIsSupported = $fastIsSupported && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
             }
-            $unpackedDecider = $fastPacker->items->count() <=> $this->items->count();
+            $unpackedDecider = $fastPacker->items->count() <=> $thoroughItems->count();
             if ($fastIsSupported && ($unpackedDecider < 0 || ($unpackedDecider === 0 && $thoroughPacker->compareSolutions($fastBoxes, $packedBoxes) < 0))) {
                 $packedBoxes = $fastBoxes;
-                $this->items = $fastPacker->items;
+                $unpackedItems = $fastPacker->items;
                 foreach ($this->boxes as $box) {
-                    $this->boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
+                    if (self::isUsable($box)) {
+                        $boxQuantitiesAvailable[$box] = $fastPacker->boxQuantitiesAvailable[$box];
+                    }
                 }
             }
         }
 
-        if ($this->items->count() > 0) {
+        if ($unpackedItems->count() > 0) {
             if ($this->throwOnUnpackableItem) {
+                $this->takePackedItemsAndBoxes($packedBoxes, $boxQuantitiesAvailable);
                 throw new NoBoxesAvailableException("No boxes could be found for item '{$this->items->top()->getDescription()}'", $this->items);
             }
-            $this->logger->log(LogLevel::INFO, "{$this->items->count()} unpackable items found");
+            $this->logger->log(LogLevel::INFO, "{$unpackedItems->count()} unpackable items found");
         }
 
-        if ($packedBoxes->count() > 1 && $packedBoxes->count() <= $this->maxBoxesToBalanceWeight) {
-            $boxQuantitiesAvailable = clone $this->boxQuantitiesAvailable;
-            $redistributor = new WeightRedistributor($this->boxes, $this->packedBoxSorter, $boxQuantitiesAvailable, $this->timeoutChecker, $volumePackerFactory);
+        // weight balancing repacks boxes many times over, so each repack gets the effort of an improvement attempt
+        if ($packedBoxes->count() > 1 && $packedBoxes->count() <= $this->maxBoxesToBalanceWeight && !$volumePackerFactory->isOutOfTime()) {
+            $thoroughPacker->limitEffortForRepacking();
+            $redistributedQuantities = clone $boxQuantitiesAvailable;
+            $redistributor = new WeightRedistributor($this->boxes, $this->packedBoxSorter, $redistributedQuantities, $this->timeoutChecker, $volumePackerFactory);
             $redistributor->setLogger($this->logger);
             $redistributed = $redistributor->redistributeWeight($packedBoxes);
             if ($thoroughPacker->compareSolutions($redistributed, $packedBoxes) <= 0) {
                 $packedBoxes = $redistributed;
-                $this->boxQuantitiesAvailable = $boxQuantitiesAvailable;
+                $boxQuantitiesAvailable = $redistributedQuantities;
             }
+            $volumePackerFactory->resetCallLimits();
         }
 
+        $this->takePackedItemsAndBoxes($packedBoxes, $boxQuantitiesAvailable);
         $this->logger->log(LogLevel::INFO, "[PACKING COMPLETED], {$packedBoxes->count()} boxes");
 
         return $packedBoxes;
     }
 
     /**
-     * A Fast-strategy packer set up with the same items, boxes and box quantities as this one, ready to pack.
+     * Commit a final packing: remove the packed items from the order's list, and take the boxes used.
+     *
+     * @param WeakMap<Box, int> $boxQuantitiesAvailable the quantities left once the packing's boxes are taken
+     */
+    private function takePackedItemsAndBoxes(PackedBoxList $packedBoxes, WeakMap $boxQuantitiesAvailable): void
+    {
+        foreach ($packedBoxes as $packedBox) {
+            $this->items->removePackedItems($packedBox->items);
+        }
+        $this->boxQuantitiesAvailable = $boxQuantitiesAvailable;
+    }
+
+    /**
+     * A Fast-strategy packer set up like this one (items, boxes in the same order, box quantities, timeout checker),
+     * ready to pack.
      */
     private function packFastForComparison(): self
     {
-        $boxes = new BoxList();
+        $packer = new self(clone $this->items, $this->boxes, $this->packedBoxSorter, $this->logger);
         foreach ($this->boxes as $box) {
-            if ($box->getMaxWeight() >= $box->getEmptyWeight()) { // unusable box types are skipped by the thorough search too
-                $boxes->insert($box);
-            }
-        }
-        $packer = new self(clone $this->items, new BoxList(), $this->packedBoxSorter);
-        $packer->setBoxes($boxes);
-        foreach ($boxes as $box) {
-            $packer->setBoxQuantity($box, $this->boxQuantitiesAvailable[$box]);
+            // unusable box types are skipped by the thorough search too
+            $packer->setBoxQuantity($box, self::isUsable($box) ? $this->boxQuantitiesAvailable[$box] : 0);
         }
         $packer->throwOnUnpackableItem(false);
+        $packer->timeoutChecker = $this->timeoutChecker;
+        $packer->allowAngledPlacement = $this->allowAngledPlacement;
+        $packer->minimumSupport = $this->minimumSupport;
 
         return $packer;
+    }
+
+    /**
+     * Whether the box can hold anything at all (its maximum weight is no less than its empty weight).
+     */
+    private static function isUsable(Box $box): bool
+    {
+        return $box->getMaxWeight() >= $box->getEmptyWeight();
     }
 
     /**
@@ -503,7 +544,8 @@ class Packer implements LoggerAwareInterface
             $this->strategy === PackingStrategy::Thorough ? $this->searchTimeLimit : null,
             $this->logger,
             $this->beStrictAboutItemOrdering,
-            $this->allowAngledPlacement
+            $this->allowAngledPlacement,
+            $this->timeoutChecker
         );
     }
 

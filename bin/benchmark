@@ -26,10 +26,13 @@ $usage = <<<'USAGE'
       --jobs=N            parallel worker processes (default: 4)
       --opt=KEY=VALUE     strategy option, repeatable (e.g. --opt=width=8 --opt=time=2)
       --save=PATH         write full results (summary + per-instance rows) as JSON
-      --compare=PATH      compare against a previously saved result
+      --compare=PATH      compare against a previously saved result (over the instances both runs have)
       --rows              print one line per instance
-      --csv=PATH          write "test name,utilisation" lines (the format of tests/data/*-expected*.csv)
+      --csv=PATH          write "test name,utilisation" lines for single-container datasets, or "test name,containers"
+                          for ivancic alone (the format of tests/data/published-expected*.csv and ivancic-expected*.csv)
       --list              list strategies
+
+    Exits 1 if any instance fails with an error or produces an invalid packing, 2 on a usage or output error.
 
     USAGE;
 
@@ -57,12 +60,48 @@ foreach ((array) ($opts['opt'] ?? []) as $kv) {
     $strategyOptions[$k] = $v;
 }
 
+try {
+    Strategies::validateOptions($strategy, $strategyOptions);
+    $kinds = [];
+    foreach ($datasets as $dataset) {
+        $kinds[$dataset] = InstanceLoader::kind($dataset);
+    }
+} catch (InvalidArgumentException $e) {
+    BenchmarkRunner::stderr($e->getMessage());
+    exit(2);
+}
+$multiDatasets = array_keys($kinds, 'multi', true);
+if ($multiDatasets !== [] && !Strategies::supportsMulti($strategy)) {
+    BenchmarkRunner::stderr("Strategy {$strategy} is single-container only; drop the multi-container datasets: " . implode(', ', $multiDatasets));
+    exit(2);
+}
+if (isset($opts['csv']) && $multiDatasets !== [] && $datasets !== ['ivancic']) {
+    BenchmarkRunner::stderr('--csv writes one value per instance, so it takes either single-container datasets or ivancic alone. The bookshop baselines (and the other PHPUnit baselines) are written to tests/data/*-lastrun*.csv by the PHPUnit suites instead.');
+    exit(2);
+}
+
+// The workers run with assertions off, so that an invalid packing is counted by PackingValidator rather than
+// thrown; do the same in-process.
+if ((int) ini_get('zend.assertions') === 1) {
+    ini_set('zend.assertions', '0');
+}
+
 $runner = new BenchmarkRunner($strategy, $strategyOptions);
 
 if (isset($opts['worker'])) {
     [$shard, $shards] = array_map('intval', explode('/', $opts['shard'] ?? '0/1'));
     echo json_encode($runner->runShard($datasets, $limit, $shard, $shards), JSON_THROW_ON_ERROR);
     exit(0);
+}
+
+$baseline = null;
+if (isset($opts['compare'])) {
+    try {
+        $baseline = BenchmarkRunner::loadResult($opts['compare']);
+    } catch (RuntimeException|JsonException $e) {
+        BenchmarkRunner::stderr("Cannot load {$opts['compare']}: {$e->getMessage()}");
+        exit(2);
+    }
 }
 
 $workerArgs = ["--strategy={$strategy}", "--datasets={$datasetSpec}", "--limit={$limit}"];
@@ -78,14 +117,11 @@ $wall = (hrtime(true) - $wallStart) / 1e9;
 
 $summary = BenchmarkRunner::summarise($rows);
 
-$baseline = null;
-if (isset($opts['compare'])) {
-    $baseline = BenchmarkRunner::loadResult($opts['compare']);
-}
-
 if (isset($opts['rows'])) {
     foreach ($rows as $row) {
-        if ($row['kind'] === 'single') {
+        if (isset($row['error'])) {
+            printf("%-12s %-8s ERROR %s\n", $row['dataset'], $row['id'], $row['error']);
+        } elseif ($row['kind'] === 'single') {
             printf("%-12s %-8s util %5.1f%% packed %d/%d %.3fs\n", $row['dataset'], $row['id'], $row['util'], $row['packed'], $row['items'], $row['time']);
         } else {
             printf("%-12s %-34s boxes %d lb %d vol %d packed %d/%d %.3fs\n", $row['dataset'], $row['id'], $row['boxes'], $row['lb'], $row['boxVolume'], $row['packed'], $row['items'], $row['time']);
@@ -94,30 +130,61 @@ if (isset($opts['rows'])) {
 }
 
 $optionText = $strategyOptions ? ' ' . json_encode($strategyOptions) : '';
-echo BenchmarkRunner::formatSummary($summary, $baseline['summary'] ?? null, "strategy {$strategy}{$optionText}, wall {$wall}s, jobs {$jobs}");
+$title = "strategy {$strategy}{$optionText}, wall {$wall}s, jobs {$jobs}";
 if ($baseline) {
+    [$matchedRows, $matchedBaselineRows, $onlyCurrent, $onlyBaseline] = BenchmarkRunner::intersect($rows, $baseline['rows']);
+    echo BenchmarkRunner::formatSummary($summary, BenchmarkRunner::summarise($matchedBaselineRows), $title, BenchmarkRunner::summarise($matchedRows));
+    if ($onlyCurrent > 0 || $onlyBaseline > 0) {
+        printf("baseline compared on the %d instances in both runs (%d only in this run, %d only in the baseline)\n", count($matchedRows), $onlyCurrent, $onlyBaseline);
+    }
     echo BenchmarkRunner::formatWinLoss($rows, $baseline['rows']);
+} else {
+    echo BenchmarkRunner::formatSummary($summary, title: $title);
+}
+
+foreach ($rows as $row) {
+    if (isset($row['error'])) {
+        BenchmarkRunner::stderr("error in {$row['dataset']} {$row['id']}: {$row['error']}");
+    }
+}
+
+$status = BenchmarkRunner::hasFailures($rows) ? 1 : 0;
+
+if (isset($opts['save'])) {
+    try {
+        BenchmarkRunner::save($opts['save'], [
+            'strategy' => $strategy,
+            'options' => $strategyOptions,
+            'datasets' => $datasets,
+            'limit' => $limit,
+            'php' => PHP_VERSION,
+            'wall' => $wall,
+            'summary' => $summary,
+            'rows' => $rows,
+        ]);
+    } catch (RuntimeException $e) {
+        BenchmarkRunner::stderr($e->getMessage());
+        exit(2);
+    }
+    echo "saved {$opts['save']}\n";
 }
 
 if (isset($opts['csv'])) {
+    if ($status !== 0) {
+        BenchmarkRunner::stderr("Not writing {$opts['csv']}: some instances failed or produced invalid packings");
+        exit($status);
+    }
     $csv = '';
     foreach ($rows as $row) {
         $csv .= InstanceLoader::testName($row['dataset'], $row['id']) . ',' . ($row['kind'] === 'single' ? sprintf('%.1f', $row['util']) : $row['boxes']) . "\n";
     }
-    file_put_contents($opts['csv'], $csv);
+    try {
+        BenchmarkRunner::writeFile($opts['csv'], $csv);
+    } catch (RuntimeException $e) {
+        BenchmarkRunner::stderr($e->getMessage());
+        exit(2);
+    }
     echo "wrote {$opts['csv']}\n";
 }
 
-if (isset($opts['save'])) {
-    BenchmarkRunner::save($opts['save'], [
-        'strategy' => $strategy,
-        'options' => $strategyOptions,
-        'datasets' => $datasets,
-        'limit' => $limit,
-        'php' => PHP_VERSION,
-        'wall' => $wall,
-        'summary' => $summary,
-        'rows' => $rows,
-    ]);
-    echo "saved {$opts['save']}\n";
-}
+exit($status);

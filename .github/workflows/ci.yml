@@ -143,6 +143,7 @@ jobs:
           - efficiency-bookshop
           - efficiency-container
           - efficiency-extreme
+          - efficiency-thorough
 
     steps:
     - uses: actions/checkout@v7
