@@ -1434,7 +1434,8 @@ class BlockPacker implements LoggerAwareInterface
      * items of an angled block are offset by the layout's pitch and positioned by their bounding boxes.
      *
      * This is where positions leave the search, so they are given relative to the deck (the box's own footprint):
-     * with an allowed overhang, the search frame is that of the envelope.
+     * with an allowed overhang, the search frame is the deck widened by as much of each allowance as the items' caps
+     * can use (see $overhang), in which the deck starts at $deckX, $deckY.
      *
      * @param  array<int, int|float>                                                         $candidate
      * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int, 7: float}>

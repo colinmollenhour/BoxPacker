@@ -125,10 +125,10 @@ class OverhangPackingTest extends TestCase
         return [
             'none' => [null, 10, 10],
             '1.5 / 3 / 3' => [new AllowedOverhang(150, 150, 300, 300), 16, 16],
-            // Thorough mixes orientations where a uniform grid cannot: 8 flat (4953 × 2252 × 756) hanging 3" over the
-            // front, and beside them on the deck 2 × 2 on their long edges (4953 × 756 × 2252), so 12. Each item is
-            // within its caps (the validator checks every one) and fully supported. The table's 10 is the best
-            // uniform grid.
+            // Thorough mixes orientations where a uniform grid cannot: 8 flat (4953 × 2252 × 756) hanging over the
+            // front by its allowance, and behind them 2 × 2 on their long edges (4953 × 756 × 2252), so 12 (see
+            // testAcmeTrampolinesThoroughMixesOrientations()). Each item is within its caps (the validator checks every
+            // one) and fully supported. The table's 10 is the best uniform grid.
             '1.5 / 3 / 0' => [new AllowedOverhang(150, 150, 300, 0), 10, 12],
             '2.5 / 2.5 / 2.5' => [new AllowedOverhang(250, 250, 250, 250), 10, 12],
         ];
@@ -148,6 +148,44 @@ class OverhangPackingTest extends TestCase
         self::assertValid($packedBox);
         self::assertGreaterThanOrEqual($grid, $packedBox->items->count());
         self::assertCount($thorough, $packedBox->items);
+    }
+
+    /**
+     * The rows of the acceptance table where Thorough finds more than the best uniform grid.
+     *
+     * @return array<string, array{AllowedOverhang}>
+     */
+    public static function acmeTrampolinesMixedTwelve(): array
+    {
+        return [
+            '1.5 / 3 / 0' => [new AllowedOverhang(150, 150, 300, 0)],
+            '2.5 / 2.5 / 2.5' => [new AllowedOverhang(250, 250, 250, 250)],
+        ];
+    }
+
+    #[DataProvider('acmeTrampolinesMixedTwelve')]
+    public function testAcmeTrampolinesThoroughMixesOrientations(AllowedOverhang $allowance): void
+    {
+        $packedBox = self::thorough(self::pallet($allowance), self::trampolines(24));
+
+        self::assertValid($packedBox);
+        $packed = iterator_to_array($packedBox->items, false);
+        $flat = array_filter($packed, static fn (PackedItem $item) => $item->depth === 756);
+        $onEdge = array_filter($packed, static fn (PackedItem $item) => $item->depth === 2252);
+        self::assertCount(8, $flat);
+        self::assertCount(4, $onEdge);
+        foreach ($flat as $item) {
+            self::assertSame([4953, 2252], [$item->width, $item->length]);
+        }
+        foreach ($onEdge as $item) {
+            self::assertSame([4953, 756], [$item->width, $item->length]);
+        }
+        // the flat ones hang over the front, the ones on their long edges stand behind them
+        self::assertLessThan(0, min(array_map(static fn (PackedItem $item) => $item->y, $flat)));
+        self::assertGreaterThanOrEqual(
+            max(array_map(static fn (PackedItem $item) => $item->y + $item->length, $flat)),
+            min(array_map(static fn (PackedItem $item) => $item->y, $onEdge))
+        );
     }
 
     #[DataProvider('acmeTrampolinesTable')]

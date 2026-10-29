@@ -22,10 +22,12 @@ namespace DVDoug\BoxPacker;
  * or y. The inner dimensions (and so volume utilisation and the default box cost) are still those of the box itself.
  *
  * The value must not change while a packing is in progress. All allowances zero packs exactly as a box that does not
- * implement this interface. An allowance beyond the largest cap of any item has no further effect on where items go
- * (it only loosens the capacity bounds used to choose boxes); allowances so large that the width, length or volume of
- * the box with its overhang cannot be represented as an int make packing throw an InvalidArgumentException. See the
- * "Allowed overhang" page of the documentation.
+ * implement this interface. Within one box, an allowance beyond the largest cap of any item has no further effect on
+ * where items go. The capacity bounds used to choose which boxes to try, and (with the thorough strategy) to share
+ * out the search effort between packings, use the full allowances, though: a very large allowance can change which
+ * boxes are tried and how much search each gets, so give realistic allowances. Allowances so large that the width,
+ * length or volume of the box with its overhang cannot be represented as an int make packing throw an
+ * InvalidArgumentException. See the "Allowed overhang" page of the documentation.
  */
 interface OverhangBox extends Box
 {

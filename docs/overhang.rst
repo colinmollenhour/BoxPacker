@@ -64,11 +64,12 @@ other items. A 12 in cube can hang at most 1.8 in past any edge, even if the all
 The *envelope* is the deck widened by the four allowances. Every item stays within it. Depth (height) is unchanged.
 Small items gain little: an extent of fewer than 7 length units has a cap of zero after rounding.
 
-An allowance larger than any item's cap has no further effect on where items go: the search uses only as much of
-each allowance as the largest cap among the items allows. Box selection and the thorough strategy's capacity bounds
-use the full allowances, so a very large allowance only loosens those bounds. Allowances so large that the
-envelope's width, length or volume cannot be represented as an ``int`` make packing throw
-``InvalidArgumentException``.
+Within one box, an allowance larger than any item's cap has no further effect on where items go: the search uses only as
+much of each allowance as the largest cap among the items allows. Box selection and the thorough strategy's capacity
+bounds and sharing of search effort between packings use the full allowances, however. A very large allowance can
+therefore change which boxes are tried and how much search each one gets, so give allowances that match what the pallet
+can really carry. Allowances so large that the envelope's width, length or volume cannot be represented as an ``int``
+make packing throw ``InvalidArgumentException``.
 
 For example, consider a 49.53 × 22.52 × 7.56 in carton on a 48 × 40 in pallet with a 65 in maximum load height.
 Without overhang, the best uniform layout is 10 cartons on end (2 × 5 × 1, across width × length × height).
@@ -81,8 +82,8 @@ With 1.5 in allowed on the left and right and 3 in on the front and back, 16 fit
 With the back allowance set to zero, that two-deep layout would require one carton to hang 5.04 in past the front.
 That is about 22% of its 22.52 in length, exceeding the 15% cap even if the front allowance were large enough.
 In that case, and also with 2.5 in on every edge, the best uniform layout stays at 10. ``Thorough`` finds 12 by
-mixing orientations: 8 lying flat at the front, overhanging it by up to 3 in, and 4 behind them standing on a long
-edge, in 2 rows stacked 2 high. Every carton stays within its caps.
+mixing orientations: 8 lying flat at the front, overhanging it by up to the front allowance (3 in or 2.5 in), and 4
+behind them standing on a long edge, in 2 rows stacked 2 high. Every carton stays within its caps.
 The library takes integers: for these dimensions, scale inches to hundredths as in the example above. The cap
 for a 2252-unit side is 337 units, rounded down from 337.8.
 
@@ -131,7 +132,8 @@ The :doc:`thorough strategy<thorough>` searches the envelope while enforcing the
 ``MAX_FILLABLE_TABLE`` size limit is measured on the envelope dimensions, using only as much of each allowance as
 the items can use. The search is a heuristic: with the larger space it can occasionally find a slightly less dense
 packing than it would without overhang. For up to 40 items, if the search leaves some out, it also compares its
-packing with the ``Fast`` packing on the deck alone and keeps the denser, which puts a floor under it.
+packing with the ``Fast`` packing on the deck alone and keeps the denser. Time permitting, and provided that packing
+meets the minimum support, this puts a floor under the thorough result.
 
 For an opted-in box, ``Fast`` also runs a quick, greedy version of the thorough block search. It keeps whichever of
 that packing and its usual layer packing on the deck uses more volume (then, if equal, packs more items). Fast
@@ -156,6 +158,8 @@ The URLs from ``PackedBox::generateVisualisationURL()`` and ``PackedBoxList::gen
 optional sixth element to each box tuple, after the packed items: ``[left, right, front, back]``.
 Both additions are omitted for a plain box or an all-zero allowance.
 
-The :ref:`visualiser<visualiser>` draws the deck outline as usual and the envelope as a faint outline. Item
-positions stay relative to the deck, including negative coordinates. The envelope sets the spacing and scale
-when several boxes are shown together.
+The :ref:`visualiser<visualiser>` draws the deck outline as usual and the envelope as a dashed amber outline. Item
+positions stay relative to the deck, including negative coordinates. The visualiser draws each edge of the envelope only
+as far as that box's packed items could hang over it: the allowance, but no further than the largest cap among the
+square-placed items. With realistic allowances this is the full envelope. This drawn envelope also sets the spacing and
+scale, including when several boxes are shown together.
