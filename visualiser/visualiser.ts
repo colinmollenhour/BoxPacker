@@ -11,6 +11,7 @@ import {
     ArcRotateCamera,
     Color3,
     CreateBox,
+    CreateLineSystem,
     CreateLines,
     CreatePlane,
     DynamicTexture,
@@ -101,6 +102,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 number,
                 number,
                 [number, number, number, number, number, number, number, number?][],
+                [number, number, number, number]?,
             ],
         ) => {
             const packedItems: PackedItem[] = [];
@@ -139,6 +141,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     packedBox[2],
                     packedBox[3],
                     packedItems,
+                    packedBox[5],
                 ),
             );
         },
@@ -155,11 +158,11 @@ document.addEventListener("DOMContentLoaded", function () {
     let maxBoxLength = 0;
     let maxBoxDepth = 0;
     for (const packedBox of packedBoxes) {
-        maxBoxWidth = Math.max(maxBoxWidth, packedBox.width);
-        maxBoxLength = Math.max(maxBoxLength, packedBox.length);
+        maxBoxWidth = Math.max(maxBoxWidth, packedBox.envelopeWidth());
+        maxBoxLength = Math.max(maxBoxLength, packedBox.envelopeLength());
         maxBoxDepth = Math.max(maxBoxDepth, packedBox.depth);
     }
-    // Cell pitch = box footprint + half-box gap so neighbours stay readable.
+    // Cell pitch = envelope footprint + half-envelope gap so neighbours stay readable.
     const cellWidth = maxBoxWidth * 1.5;
     const cellLength = maxBoxLength * 1.5;
     const layoutMaxX = (gridCols - 1) * cellWidth + maxBoxWidth;
@@ -519,8 +522,10 @@ document.addEventListener("DOMContentLoaded", function () {
         packedBoxes.forEach((packedBox, index) => {
             const col = index % gridCols;
             const row = Math.floor(index / gridCols);
-            const boxPlacementX = scale * col * cellWidth;
-            const boxPlacementZ = scale * row * cellLength;
+            const [left, right, front, back] = packedBox.allowedOverhang;
+            // Keep the envelope in its cell, with item coordinates relative to the deck.
+            const boxPlacementX = scale * col * cellWidth + scale * left;
+            const boxPlacementZ = scale * row * cellLength + scale * front;
 
             showAxis(
                 scale * packedBox.width,
@@ -549,6 +554,40 @@ document.addEventListener("DOMContentLoaded", function () {
             drawnBox.position.x = boxPlacementX + (scale * packedBox.width) / 2;
             drawnBox.position.z = boxPlacementZ + (scale * packedBox.length) / 2;
             drawnBox.position.y = (scale * packedBox.depth) / 2;
+
+            if (left || right || front || back) {
+                const x1 = boxPlacementX - scale * left;
+                const x2 = boxPlacementX + scale * (packedBox.width + right);
+                const z1 = boxPlacementZ - scale * front;
+                const z2 = boxPlacementZ + scale * (packedBox.length + back);
+                const height = scale * packedBox.depth;
+                const corners = [
+                    [x1, z1],
+                    [x2, z1],
+                    [x2, z2],
+                    [x1, z2],
+                ];
+                const outline = CreateLineSystem(
+                    `Envelope #${index}`,
+                    {
+                        lines: [
+                            ...[0, height].map((y) =>
+                                [...corners, corners[0]].map(
+                                    ([x, z]) => new Vector3(x, y, z),
+                                ),
+                            ),
+                            ...corners.map(([x, z]) => [
+                                new Vector3(x, 0, z),
+                                new Vector3(x, height, z),
+                            ]),
+                        ],
+                    },
+                    scene,
+                );
+                outline.isPickable = false;
+                outline.color = new Color3(0.7, 0.7, 0.7);
+                outline.alpha = 0.45;
+            }
 
             packedBox.packedItems.forEach((packedItem: PackedItem, itemIndex) => {
                 let drawnItem = CreateBox(
@@ -657,7 +696,18 @@ class PackedBox {
         public readonly length: number,
         public readonly depth: number,
         public readonly packedItems: PackedItem[],
+        public readonly allowedOverhang: readonly [number, number, number, number] = [
+            0, 0, 0, 0,
+        ],
     ) {}
+
+    envelopeWidth(): number {
+        return this.width + this.allowedOverhang[0] + this.allowedOverhang[1];
+    }
+
+    envelopeLength(): number {
+        return this.length + this.allowedOverhang[2] + this.allowedOverhang[3];
+    }
 }
 
 class PackedItem {

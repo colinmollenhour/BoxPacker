@@ -11,6 +11,10 @@ Lower-level methods are also available for examining this data in detail either 
 (a hypothetical box placed around the items) or ``getRemaining[Width|Length|Depth()]`` (the difference between the dimensions of
 the actual box and the hypothetical box).
 
+With :doc:`allowed overhang<overhang>`, used width and length include overhang on either side of the origin, so
+remaining width and length can be negative. Volume measurements stay based on the deck: utilisation can exceed
+100% and unused volume can be negative.
+
 .. note::
 
     BoxPacker will try to pack items into the smallest box available

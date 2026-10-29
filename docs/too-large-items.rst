@@ -5,6 +5,9 @@ As a library, by default BoxPacker makes the design choice that any errors or ex
 best handled by you and your own code as the appropriate way to to handle a failure will vary from application to application.
 There is no attempt made to handle/recover from them internally.
 
+An item that fits only with :doc:`allowed overhang<overhang>` can be packed in an opted-in box, provided it meets
+the per-item caps and the other packing constraints; it is not rejected merely for exceeding the deck dimensions.
+
 This includes the case where there are no boxes large enough to pack a particular item. The normal operation of the Packer
 class is to throw an ``NoBoxesAvailableException``. If your application has well-defined logging and monitoring it may be
 sufficient to simply allow the exception to bubble up to your generic handling layer and handle like any other runtime failure.

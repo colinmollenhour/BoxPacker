@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.0] - Unreleased
+### Added
+- Opt-in allowed overhang for pallets with the new `OverhangBox` interface and `AllowedOverhang` value object:
+  per-edge allowances with a 15% cap per item at every height, supported by Thorough and Fast while keeping
+  utilisation and default cost based on the real deck. Packed-box JSON includes `box.allowedOverhang` and
+  visualiser URLs include an optional allowance tuple when non-zero; the visualiser draws the deck and envelope
+
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added
 - `VolumePacker::packBestSubset()` for the single-container “fill this box as densely as possible” problem (leftover items are expected)

@@ -22,6 +22,7 @@ planning.
 * Rotation: any way up, keep-flat, or none
 * Weight limits and automatic weight balancing across cartons
 * Limited box stock, linked items, custom placement rules
+* Opt-in allowed overhang for pallets, with per-edge allowances and a 15% cap per item
 * Packed x/y/z coordinates and a 3D visualiser
 
 Requires PHP 8.2+. `composer require dvdoug/boxpacker`
