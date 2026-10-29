@@ -254,7 +254,8 @@ class ThoroughPacker implements LoggerAwareInterface
                 continue;
             }
             $this->available[$id] = $quantity;
-            $this->volumes[$id] = $box->getInnerWidth() * $box->getInnerLength() * $box->getInnerDepth();
+            // a bound on what the box can hold (with an allowed overhang, more than its own volume), not its cost
+            $this->volumes[$id] = OverhangBounds::capacityVolume($box);
             $this->capacities[$id] = $box->getMaxWeight() - $box->getEmptyWeight();
             $this->emptyCosts[$id] = $this->costCalculator->getCost(new PackedBox($box, new PackedItemList()));
             $this->maxVolume = max($this->maxVolume, $this->volumes[$id]);
@@ -452,13 +453,17 @@ class ThoroughPacker implements LoggerAwareInterface
     /**
      * An upper bound on the volume of the items that could be packed into the box: its volume, or the volume of the
      * items that fit within its weight capacity (lightest for their size first, the last one pro rata), whichever is
-     * less. Items too large for the box in any orientation (even at an angle, when allowed) are left out.
+     * less. Items too large for the box in any orientation (even at an angle, when allowed) are left out. With an
+     * allowed overhang, the box's volume and dimensions are those including the overhang (an item may fit no other way).
      *
      * @param list<Item> $items
      */
     private function packableVolumeBound(Box $box, array $items): int
     {
-        $boxEdges = [$box->getInnerWidth(), $box->getInnerLength(), $box->getInnerDepth()];
+        $overhang = OverhangBounds::forBox($box);
+        $boxEdges = $overhang === null
+            ? [$box->getInnerWidth(), $box->getInnerLength(), $box->getInnerDepth()]
+            : [$overhang->envelopeWidth(), $overhang->envelopeLength(), $box->getInnerDepth()];
         sort($boxEdges);
 
         $candidates = [];

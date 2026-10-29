@@ -23,6 +23,7 @@ use function array_slice;
 use function array_splice;
 use function array_sum;
 use function array_values;
+use function assert;
 use function atan;
 use function count;
 use function hrtime;
@@ -93,7 +94,8 @@ class BlockPacker implements LoggerAwareInterface
     private const STABILITY_ANGLE = 0.261;
 
     /**
-     * Largest box dimension for which per-axis fillable length tables are built.
+     * Largest box dimension for which per-axis fillable length tables are built (for a box with an allowed overhang,
+     * the dimensions include the overhang).
      */
     private const MAX_FILLABLE_TABLE = 50000;
 
@@ -121,11 +123,40 @@ class BlockPacker implements LoggerAwareInterface
 
     private LoggerInterface $logger;
 
+    /**
+     * Width of the search space: the box's inner width, plus the overhang on both sides if it has an allowed overhang.
+     */
     private readonly int $boxWidth;
 
+    /**
+     * Length of the search space, as $boxWidth.
+     */
     private readonly int $boxLength;
 
     private readonly int $boxDepth;
+
+    /**
+     * The box's allowed overhang (null: none). With one, the search works in the frame of the box with its overhang
+     * (the envelope), in which the deck (the box's own footprint) starts at $deckX, $deckY. Positions are given in the
+     * deck's frame only once they leave the search, in {@see itemsOf()}.
+     */
+    private readonly ?OverhangBounds $overhang;
+
+    private readonly int $deckX;
+
+    private readonly int $deckY;
+
+    private readonly int $deckWidth;
+
+    private readonly int $deckLength;
+
+    /**
+     * With an allowed overhang: for each type and orientation (by index), where a block of that orientation may go in
+     * the search frame, as [x1, y1, x2, y2] (the deck widened by the orientation's caps).
+     *
+     * @var array<int, list<array{0: int, 1: int, 2: int, 3: int}>>
+     */
+    private array $legalAreas = [];
 
     private readonly int $weightCapacity;
 
@@ -283,8 +314,13 @@ class BlockPacker implements LoggerAwareInterface
     public function __construct(private readonly Box $box, iterable $items, private readonly bool $preferStableOrientations = true)
     {
         $this->logger = new NullLogger();
-        $this->boxWidth = $box->getInnerWidth();
-        $this->boxLength = $box->getInnerLength();
+        $this->overhang = OverhangBounds::forBox($box);
+        $this->deckWidth = $box->getInnerWidth();
+        $this->deckLength = $box->getInnerLength();
+        $this->deckX = $this->overhang?->left ?? 0;
+        $this->deckY = $this->overhang?->front ?? 0;
+        $this->boxWidth = $this->overhang?->envelopeWidth() ?? $this->deckWidth;
+        $this->boxLength = $this->overhang?->envelopeLength() ?? $this->deckLength;
         $this->boxDepth = $box->getInnerDepth();
         $this->weightCapacity = $box->getMaxWeight() - $box->getEmptyWeight();
 
@@ -307,6 +343,9 @@ class BlockPacker implements LoggerAwareInterface
                 $this->volumes[$type] = $item->getWidth() * $item->getLength() * $item->getDepth();
                 $this->weights[$type] = $item->getWeight();
                 $this->orientations[$type] = $this->buildOrientations($item);
+                if ($this->overhang !== null) {
+                    $this->legalAreas[$type] = array_map(fn (array $orientation): array => $this->legalArea($orientation[0], $orientation[1]), $this->orientations[$type]);
+                }
                 $this->constrained[$type] = $item instanceof ConstrainedPlacementItem;
                 $this->itemsByType[$type] = [];
                 $this->initialCounts[$type] = 0;
@@ -789,33 +828,22 @@ class BlockPacker implements LoggerAwareInterface
         $scoring = $this->scoring;
         [$fillX, $fillY, $fillZ] = $this->fillable;
 
-        // Footprint limits [width, length, check support, max area] within which a block at the corner can go
-        if ($z1 === 0 || $this->minSupport <= 0.0) {
-            $footprints = [[$x2 - $x1, $y2 - $y1, false, PHP_INT_MAX]];
-        } else {
-            $tops = $state->tops[$z1] ?? [];
-            if ($tops === []) {
-                return [];
-            }
-            $footprints = [];
-            // fully supported blocks must lie within a covered rectangle starting at the corner
-            if (self::covers($tops, $lowX ? $x1 : $x2 - 1, $lowY ? $y1 : $y2 - 1)) {
-                foreach ($this->supportStaircase($tops, $x1, $y1, $x2, $y2, $lowX, $lowY) as [$w, $l]) {
-                    $footprints[] = [$w, $l, false, PHP_INT_MAX];
-                }
-            }
-            // when overhangs are allowed, larger blocks are possible but need checking; they can be no bigger than
-            // the supporting area within the space allows
-            if ($this->minSupport < 1.0) {
-                $supportable = self::supportedArea($tops, $x1, $y1, $x2, $y2);
-                if ($supportable > 0) {
-                    $footprints[] = [$x2 - $x1, $y2 - $y1, true, $supportable / $this->minSupport];
-                }
-            }
-            if ($footprints === []) {
-                return [];
-            }
+        $footprints = $this->footprints($state, $x1, $y1, $x2, $y2, $z1, $lowX, $lowY);
+        $overhang = $this->overhang !== null;
+        if ($footprints === [] && (!$overhang || !isset($state->tops[$z1]))) {
+            return []; // (with an allowed overhang, the part of the space an orientation may use can still be supported)
         }
+
+        // The part of the space a block is placed in, and the footprint limits there: the whole space, except that
+        // with an allowed overhang each orientation is limited to its own legal area (the deck widened by its caps),
+        // and angled blocks to the deck
+        $areaX1 = $x1;
+        $areaY1 = $y1;
+        $areaX2 = $x2;
+        $areaY2 = $y2;
+        $areaFootprints = $footprints;
+        $clippedFootprints = [];
+        $angledArea = null;
 
         // In greedy mode only the best candidate is wanted, so unconstrained candidates are tracked as a running
         // best (the first of equals wins, as with the stable sort below) and anything that cannot beat it is skipped.
@@ -845,12 +873,27 @@ class BlockPacker implements LoggerAwareInterface
             if ($tracked && $fitting * $volume <= $bestScore) {
                 continue;
             }
-            foreach ($this->orientations[$type] as [$ow, $ol, $oh]) {
+            foreach ($this->orientations[$type] as $orientation => [$ow, $ol, $oh]) {
                 if ($oh > $spaceHeight) {
                     continue;
                 }
+                if ($overhang) {
+                    [$legalX1, $legalY1, $legalX2, $legalY2] = $this->legalAreas[$type][$orientation];
+                    $areaX1 = $x1 > $legalX1 ? $x1 : $legalX1;
+                    $areaY1 = $y1 > $legalY1 ? $y1 : $legalY1;
+                    $areaX2 = $x2 < $legalX2 ? $x2 : $legalX2;
+                    $areaY2 = $y2 < $legalY2 ? $y2 : $legalY2;
+                    if ($areaX2 - $areaX1 < $ow || $areaY2 - $areaY1 < $ol) {
+                        continue;
+                    }
+                    if ($areaX1 === $x1 && $areaY1 === $y1 && $areaX2 === $x2 && $areaY2 === $y2) {
+                        $areaFootprints = $footprints;
+                    } else {
+                        $areaFootprints = $clippedFootprints[$areaX1 . ',' . $areaY1 . ',' . $areaX2 . ',' . $areaY2] ??= $this->footprints($state, $areaX1, $areaY1, $areaX2, $areaY2, $z1, $lowX, $lowY);
+                    }
+                }
                 $mz = intdiv($spaceHeight, $oh);
-                foreach ($footprints as [$maxWidth, $maxLength, $checkSupport, $maxArea]) {
+                foreach ($areaFootprints as [$maxWidth, $maxLength, $checkSupport, $maxArea]) {
                     if ($ow > $maxWidth || $ol > $maxLength) {
                         continue;
                     }
@@ -897,8 +940,8 @@ class BlockPacker implements LoggerAwareInterface
                             $w = $nx * $ow;
                             $l = $ny * $ol;
                             $h = $nz * $oh;
-                            $rx = $spaceWidth - $w;
-                            $ry = $spaceLength - $l;
+                            $rx = $areaX2 - $areaX1 - $w;
+                            $ry = $areaY2 - $areaY1 - $l;
                             $rz = $spaceHeight - $h;
                             $score = $blockVolume - ($rx - $fillX[$rx]) * $l * $h - ($ry - $fillY[$ry]) * $w * $h - ($rz - $fillZ[$rz]) * $w * $l;
                         } else {
@@ -909,8 +952,8 @@ class BlockPacker implements LoggerAwareInterface
                         }
                         $w = $nx * $ow;
                         $l = $ny * $ol;
-                        $x = $lowX ? $x1 : $x2 - $w;
-                        $y = $lowY ? $y1 : $y2 - $l;
+                        $x = $lowX ? $areaX1 : $areaX2 - $w;
+                        $y = $lowY ? $areaY1 : $areaY2 - $l;
                         if ($checkSupport && ($w * $l > $maxArea || !$this->isSupported($state, $x, $y, $z1, $ow, $ol, $nx, $ny))) {
                             continue;
                         }
@@ -925,14 +968,30 @@ class BlockPacker implements LoggerAwareInterface
                 }
             }
 
+            if (!isset($this->angledUprights[$type])) {
+                continue;
+            }
+            if ($angledArea === null) {
+                if ($overhang) {
+                    $deckX1 = max($x1, $this->deckX);
+                    $deckY1 = max($y1, $this->deckY);
+                    $deckX2 = min($x2, $this->deckX + $this->deckWidth);
+                    $deckY2 = min($y2, $this->deckY + $this->deckLength);
+                    $angledArea = [$deckX1, $deckY1, $deckX2, $deckY2, $deckX1 < $deckX2 && $deckY1 < $deckY2 ? $this->footprints($state, $deckX1, $deckY1, $deckX2, $deckY2, $z1, $lowX, $lowY) : []];
+                } else {
+                    $angledArea = [$x1, $y1, $x2, $y2, $footprints];
+                }
+            }
+            [$angledX1, $angledY1, $angledX2, $angledY2, $angledFootprints] = $angledArea;
+
             // Items that only fit turned at an angle: rows of parallel items (stacked in layers), turned just enough
             // to span the footprint in one direction. Only placed where their whole bounding box is supported.
-            foreach ($this->angledUprights[$type] ?? [] as [$long, $short, $oh]) {
+            foreach ($this->angledUprights[$type] as [$long, $short, $oh]) {
                 if ($oh > $spaceHeight) {
                     continue;
                 }
                 $mz = intdiv($spaceHeight, $oh);
-                foreach ($footprints as [$maxWidth, $maxLength, $checkSupport]) {
+                foreach ($angledFootprints as [$maxWidth, $maxLength, $checkSupport]) {
                     if ($checkSupport) {
                         continue;
                     }
@@ -972,8 +1031,8 @@ class BlockPacker implements LoggerAwareInterface
                             $l = $direction === 0 ? $rowLength : $spanned;
                             $h = $k * $oh;
                             if ($scoring === 1) {
-                                $rx = $spaceWidth - $w;
-                                $ry = $spaceLength - $l;
+                                $rx = $angledX2 - $angledX1 - $w;
+                                $ry = $angledY2 - $angledY1 - $l;
                                 $rz = $spaceHeight - $h;
                                 $score = $blockVolume - ($rx - $fillX[$rx]) * $l * $h - ($ry - $fillY[$ry]) * $w * $h - ($rz - $fillZ[$rz]) * $w * $l;
                             } else {
@@ -982,8 +1041,8 @@ class BlockPacker implements LoggerAwareInterface
                             if ($tracked && $score <= $bestScore) {
                                 continue;
                             }
-                            $x = $lowX ? $x1 : $x2 - $w;
-                            $y = $lowY ? $y1 : $y2 - $l;
+                            $x = $lowX ? $angledX1 : $angledX2 - $w;
+                            $y = $lowY ? $angledY1 : $angledY2 - $l;
                             $candidate = [$score, $blockVolume, $w, $l, $h, $type, $long, $short, $oh, $direction === 0 ? 1 : $n, $direction === 0 ? $n : 1, $k, $x, $y, $z1, $layoutId, $direction, $z2];
                             if ($tracked) {
                                 $best = $candidate;
@@ -1055,8 +1114,63 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
+     * Footprint limits [width, length, check support, max area] within which a block at the given bottom corner of
+     * this area can go: the whole area on the floor (or if no support is needed), else the rectangles at the corner
+     * that are fully supported, and (if overhanging the items below is allowed) the whole area, to be checked.
+     *
+     * @return list<array{0: int, 1: int, 2: bool, 3: int|float}>
+     */
+    private function footprints(BlockSearchState $state, int $x1, int $y1, int $x2, int $y2, int $z1, bool $lowX, bool $lowY): array
+    {
+        if ($z1 === 0 || $this->minSupport <= 0.0) {
+            return [[$x2 - $x1, $y2 - $y1, false, PHP_INT_MAX]];
+        }
+
+        $tops = $state->tops[$z1] ?? [];
+        if ($tops === []) {
+            return [];
+        }
+        $footprints = [];
+        // fully supported blocks must lie within a covered rectangle starting at the corner
+        if (self::covers($tops, $lowX ? $x1 : $x2 - 1, $lowY ? $y1 : $y2 - 1)) {
+            foreach ($this->supportStaircase($tops, $x1, $y1, $x2, $y2, $lowX, $lowY) as [$w, $l]) {
+                $footprints[] = [$w, $l, false, PHP_INT_MAX];
+            }
+        }
+        // when overhangs are allowed, larger blocks are possible but need checking; they can be no bigger than
+        // the supporting area within the space allows
+        if ($this->minSupport < 1.0) {
+            $supportable = self::supportedArea($tops, $x1, $y1, $x2, $y2);
+            if ($supportable > 0) {
+                $footprints[] = [$x2 - $x1, $y2 - $y1, true, $supportable / $this->minSupport];
+            }
+        }
+
+        return $footprints;
+    }
+
+    /**
+     * With an allowed overhang: where in the search frame an item of this width and length may go, as [x1, y1, x2, y2].
+     *
+     * @return array{0: int, 1: int, 2: int, 3: int}
+     */
+    private function legalArea(int $width, int $length): array
+    {
+        $overhang = $this->overhang;
+        assert($overhang !== null);
+
+        return [
+            $this->deckX - $overhang->capLeft($width),
+            $this->deckY - $overhang->capFront($length),
+            $this->deckX + $this->deckWidth + $overhang->capRight($width),
+            $this->deckY + $this->deckLength + $overhang->capBack($length),
+        ];
+    }
+
+    /**
      * The block of the first $count items of a block (in the order they are placed, see {@see itemsOf()}): as many
-     * whole layers, or else rows, as that makes, in the same corner of the space.
+     * whole layers, or else rows, as that makes, in the same corner of the space (of the part of it the block's
+     * orientation may use, with an allowed overhang).
      *
      * @param  array<int, int|float>                                                    $candidate
      * @param  array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6?: true, 7?: int} $space
@@ -1069,6 +1183,14 @@ class BlockPacker implements LoggerAwareInterface
         $ow = $candidate[self::C_OW];
         $ol = $candidate[self::C_OL];
         $oh = $candidate[self::C_OH];
+        if ($this->overhang !== null) {
+            // within the same part of the space as the block it is part of (see candidatesAt())
+            [$legalX1, $legalY1, $legalX2, $legalY2] = $this->legalArea($ow, $ol);
+            $x1 = max($x1, $legalX1);
+            $y1 = max($y1, $legalY1);
+            $x2 = min($x2, $legalX2);
+            $y2 = min($y2, $legalY2);
+        }
         $nx = $candidate[self::C_NX];
         $ny = $candidate[self::C_NY];
         if ($count >= $nx * $ny) {
@@ -1293,14 +1415,17 @@ class BlockPacker implements LoggerAwareInterface
      * The individual items of a placed block, bottom-up, as [type, x, y, z, width, length, height, angle]. The
      * items of an angled block are offset by the layout's pitch and positioned by their bounding boxes.
      *
+     * This is where positions leave the search, so they are given relative to the deck (the box's own footprint):
+     * with an allowed overhang, the search frame is that of the envelope.
+     *
      * @param  array<int, int|float>                                                         $candidate
      * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int, 7: float}>
      */
     private function itemsOf(array $candidate): array
     {
         $type = $candidate[self::C_TYPE];
-        $x = $candidate[self::C_X];
-        $y = $candidate[self::C_Y];
+        $x = $candidate[self::C_X] - $this->deckX;
+        $y = $candidate[self::C_Y] - $this->deckY;
         $z = $candidate[self::C_Z];
         $items = [];
         [$ow, $ol, $oh, $nx, $ny, $nz] = [$candidate[self::C_OW], $candidate[self::C_OL], $candidate[self::C_OH], $candidate[self::C_NX], $candidate[self::C_NY], $candidate[self::C_NZ]];
@@ -1525,10 +1650,13 @@ class BlockPacker implements LoggerAwareInterface
                 continue;
             }
             [$w, $l, $h] = $orientation;
-            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), 0, 0, 0, $w, $l, $h)) {
+            // in the corner, or where the item is within its caps if it only fits the box with its overhang
+            $x = $this->overhang?->startX($w) ?? 0;
+            $y = $this->overhang?->startY($l) ?? 0;
+            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), $x, $y, 0, $w, $l, $h)) {
                 continue;
             }
-            $list->insert(new PackedItem($item, 0, 0, 0, $w, $l, $h));
+            $list->insert(new PackedItem($item, $x, $y, 0, $w, $l, $h));
             $weightLeft -= $item->getWeight();
         }
 
@@ -1536,9 +1664,10 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * Distinct orientations of the item that fit the empty box. As in the layer packer, stable orientations (and those
-     * as tall as the box) are preferred, and unstable ones are only used when no stable orientation that the item may
-     * be packed in (by its placement callback, if it has one) fits the empty box.
+     * Distinct orientations of the item that fit the empty box (with its overhang, if it has an allowed overhang). As
+     * in the layer packer, stable orientations (and those as tall as the box) are preferred, and unstable ones are only
+     * used when no stable orientation that the item may be packed in (by its placement callback, if it has one) fits
+     * the empty box.
      *
      * @return list<array{0: int, 1: int, 2: int}>
      */
@@ -1556,7 +1685,8 @@ class BlockPacker implements LoggerAwareInterface
 
         $fitting = [];
         foreach ($permutations as $permutation) {
-            if ($permutation[0] <= $this->boxWidth && $permutation[1] <= $this->boxLength && $permutation[2] <= $this->boxDepth) {
+            if ($permutation[2] <= $this->boxDepth
+                && ($this->overhang === null ? $permutation[0] <= $this->deckWidth && $permutation[1] <= $this->deckLength : $this->overhang->fits($permutation[0], $permutation[1]))) {
                 $fitting[$permutation[0] . '|' . $permutation[1] . '|' . $permutation[2]] = $permutation;
             }
         }
@@ -1573,7 +1703,8 @@ class BlockPacker implements LoggerAwareInterface
                 $stable[] = [$ow, $ol, $oh];
             }
             if ($isStable && !$anyStable) {
-                $anyStable = !$item instanceof ConstrainedPlacementItem || $item->canBePacked(new PackedBox($this->box, new PackedItemList()), 0, 0, 0, $ow, $ol, $oh);
+                // asked about a position in the empty box at which the item is within its caps
+                $anyStable = !$item instanceof ConstrainedPlacementItem || $item->canBePacked(new PackedBox($this->box, new PackedItemList()), $this->overhang?->startX($ow) ?? 0, $this->overhang?->startY($ol) ?? 0, 0, $ow, $ol, $oh);
             }
         }
 
@@ -1582,7 +1713,8 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * The ways up an item can go when turned at an angle, as [long side, short side, height], keeping only those
-     * that fit the empty box in at least one direction (and only stable ones where there are any).
+     * that fit the empty box (its deck, with an allowed overhang) in at least one direction (and only stable ones where
+     * there are any).
      *
      * @return list<array{0: int, 1: int, 2: int}>
      */
@@ -1593,10 +1725,11 @@ class BlockPacker implements LoggerAwareInterface
             if ($h > $this->boxDepth) {
                 continue;
             }
-            $acrossWidth = $this->angledLayout($long, $short, $this->boxWidth);
-            $acrossLength = $this->angledLayout($long, $short, $this->boxLength);
-            if (($acrossWidth !== null && $this->angledLayouts[$acrossWidth]['itemLength'] <= $this->boxLength)
-                || ($acrossLength !== null && $this->angledLayouts[$acrossLength]['itemLength'] <= $this->boxWidth)) {
+            // angled items stay on the deck, even with an allowed overhang
+            $acrossWidth = $this->angledLayout($long, $short, $this->deckWidth);
+            $acrossLength = $this->angledLayout($long, $short, $this->deckLength);
+            if (($acrossWidth !== null && $this->angledLayouts[$acrossWidth]['itemLength'] <= $this->deckLength)
+                || ($acrossLength !== null && $this->angledLayouts[$acrossLength]['itemLength'] <= $this->deckWidth)) {
                 $fitting[$long . '|' . $short . '|' . $h] = [$long, $short, $h];
             }
         }

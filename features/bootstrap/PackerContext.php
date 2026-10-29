@@ -8,6 +8,7 @@
 declare(strict_types=1);
 
 use Behat\Behat\Context\Context;
+use DVDoug\BoxPacker\AllowedOverhang;
 use DVDoug\BoxPacker\Box;
 use DVDoug\BoxPacker\BoxList;
 use DVDoug\BoxPacker\ItemList;
@@ -15,6 +16,7 @@ use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedBoxList;
 use DVDoug\BoxPacker\Packer;
 use DVDoug\BoxPacker\Rotation;
+use DVDoug\BoxPacker\Test\OverhangTestBox;
 use DVDoug\BoxPacker\Test\TestBox;
 use DVDoug\BoxPacker\Test\TestItem;
 use DVDoug\BoxPacker\VolumePacker;
@@ -84,6 +86,49 @@ class PackerContext implements Context
     ): void {
         $box = new TestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight);
         $this->box = $box;
+    }
+
+    /**
+     * @Given /^there is a box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm left, (\d+)mm right, (\d+)mm front and (\d+)mm back$/
+     */
+    public function thereIsABoxWithAnAllowedOverhang(
+        $boxType,
+        $outerWidth,
+        $outerLength,
+        $outerDepth,
+        $emptyWeight,
+        $innerWidth,
+        $innerLength,
+        $innerDepth,
+        $maxWeight,
+        $left,
+        $right,
+        $front,
+        $back
+    ): void {
+        $box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang($left, $right, $front, $back));
+        $this->boxList->insert($box);
+    }
+
+    /**
+     * @Given /^the box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm left, (\d+)mm right, (\d+)mm front and (\d+)mm back$/
+     */
+    public function theBoxWithAnAllowedOverhang(
+        $boxType,
+        $outerWidth,
+        $outerLength,
+        $outerDepth,
+        $emptyWeight,
+        $innerWidth,
+        $innerLength,
+        $innerDepth,
+        $maxWeight,
+        $left,
+        $right,
+        $front,
+        $back
+    ): void {
+        $this->box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang($left, $right, $front, $back));
     }
 
     /**

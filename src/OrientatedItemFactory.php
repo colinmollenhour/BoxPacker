@@ -238,6 +238,12 @@ class OrientatedItemFactory implements LoggerAwareInterface
             $this->box->getInnerLength() .
             '|' .
             $this->box->getInnerDepth();
+        // the layer packer only packs the deck, so the answer does not depend on the overhang, but keep boxes that
+        // differ in it apart all the same
+        $overhang = OverhangBounds::forBox($this->box);
+        if ($overhang !== null) {
+            $cacheKey .= "|{$overhang->left}|{$overhang->right}|{$overhang->front}|{$overhang->back}";
+        }
 
         if (isset(static::$emptyBoxStableItemOrientationCache[$cacheKey])) {
             return static::$emptyBoxStableItemOrientationCache[$cacheKey];

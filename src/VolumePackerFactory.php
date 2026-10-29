@@ -69,15 +69,15 @@ class VolumePackerFactory
         $volumePacker->beStrictAboutItemOrdering($this->beStrictAboutItemOrdering);
         $volumePacker->setTimeoutChecker($this->timeoutChecker);
         $volumePacker->setSearchListener($this->recordSearch(...));
+        // the Fast strategy uses it where it packs with the block search (angled placement, allowed overhang)
+        $volumePacker->setMinimumSupport($this->minimumSupport);
         if ($this->allowAngledPlacement) {
             $volumePacker->setAllowAngledPlacement(true);
-            $volumePacker->setMinimumSupport($this->minimumSupport);
         }
 
         if ($this->strategy === PackingStrategy::Thorough) {
             $volumePacker->setStrategy($this->strategy);
             $volumePacker->setMaxBeamWidth($this->maxBeamWidth);
-            $volumePacker->setMinimumSupport($this->minimumSupport);
             $volumePacker->setSearchBudget($this->getCallSearchBudget());
             $volumePacker->setSearchTimeLimit($this->getSearchTimeLimit());
         }
