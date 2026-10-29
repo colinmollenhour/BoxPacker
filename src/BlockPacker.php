@@ -95,7 +95,7 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * Largest box dimension for which per-axis fillable length tables are built (for a box with an allowed overhang,
-     * the dimensions include the overhang).
+     * the dimensions include as much of the overhang as the items' caps can use).
      */
     private const MAX_FILLABLE_TABLE = 50000;
 
@@ -124,7 +124,8 @@ class BlockPacker implements LoggerAwareInterface
     private LoggerInterface $logger;
 
     /**
-     * Width of the search space: the box's inner width, plus the overhang on both sides if it has an allowed overhang.
+     * Width of the search space: the box's inner width, plus (if it has an allowed overhang) on each side as much of
+     * the allowance as any of the items' caps can use.
      */
     private readonly int $boxWidth;
 
@@ -137,8 +138,9 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * The box's allowed overhang (null: none). With one, the search works in the frame of the box with its overhang
-     * (the envelope), in which the deck (the box's own footprint) starts at $deckX, $deckY. Positions are given in the
-     * deck's frame only once they leave the search, in {@see itemsOf()}.
+     * (the envelope, though widened only as far as the items' caps can use), in which the deck (the box's own
+     * footprint) starts at $deckX, $deckY. Positions are given in the deck's frame only once they leave the search, in
+     * {@see itemsOf()}.
      */
     private readonly ?OverhangBounds $overhang;
 
@@ -317,10 +319,6 @@ class BlockPacker implements LoggerAwareInterface
         $this->overhang = OverhangBounds::forBox($box);
         $this->deckWidth = $box->getInnerWidth();
         $this->deckLength = $box->getInnerLength();
-        $this->deckX = $this->overhang?->left ?? 0;
-        $this->deckY = $this->overhang?->front ?? 0;
-        $this->boxWidth = $this->overhang?->envelopeWidth() ?? $this->deckWidth;
-        $this->boxLength = $this->overhang?->envelopeLength() ?? $this->deckLength;
         $this->boxDepth = $box->getInnerDepth();
         $this->weightCapacity = $box->getMaxWeight() - $box->getEmptyWeight();
 
@@ -343,9 +341,6 @@ class BlockPacker implements LoggerAwareInterface
                 $this->volumes[$type] = $item->getWidth() * $item->getLength() * $item->getDepth();
                 $this->weights[$type] = $item->getWeight();
                 $this->orientations[$type] = $this->buildOrientations($item);
-                if ($this->overhang !== null) {
-                    $this->legalAreas[$type] = array_map(fn (array $orientation): array => $this->legalArea($orientation[0], $orientation[1]), $this->orientations[$type]);
-                }
                 $this->constrained[$type] = $item instanceof ConstrainedPlacementItem;
                 $this->itemsByType[$type] = [];
                 $this->initialCounts[$type] = 0;
@@ -354,6 +349,29 @@ class BlockPacker implements LoggerAwareInterface
             $this->itemsByType[$type][] = $item;
             ++$this->initialCounts[$type];
             ++$this->totalItems;
+        }
+
+        // The search frame: the deck, widened at each edge by as much of the allowance as the largest cap there of any
+        // orientation can use (an allowance beyond that would only add space that no item can reach)
+        $left = $right = $front = $back = 0;
+        if ($this->overhang !== null) {
+            foreach ($this->orientations as $orientations) {
+                foreach ($orientations as [$ow, $ol]) {
+                    $left = max($left, $this->overhang->capLeft($ow));
+                    $right = max($right, $this->overhang->capRight($ow));
+                    $front = max($front, $this->overhang->capFront($ol));
+                    $back = max($back, $this->overhang->capBack($ol));
+                }
+            }
+        }
+        $this->deckX = $left;
+        $this->deckY = $front;
+        $this->boxWidth = $this->deckWidth + $left + $right;
+        $this->boxLength = $this->deckLength + $front + $back;
+        if ($this->overhang !== null) {
+            foreach ($this->orientations as $type => $orientations) {
+                $this->legalAreas[$type] = array_map(fn (array $orientation): array => $this->legalArea($orientation[0], $orientation[1]), $orientations);
+            }
         }
 
         foreach ($this->initialCounts as $type => $count) {

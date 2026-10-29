@@ -11,6 +11,7 @@ namespace DVDoug\BoxPacker;
 
 use DVDoug\BoxPacker\Benchmark\PackingValidator;
 use DVDoug\BoxPacker\Test\ConstrainedPlacementByCountTestItem;
+use DVDoug\BoxPacker\Test\ConstrainedPlacementRecordingTestItem;
 use DVDoug\BoxPacker\Test\OverhangTestBox;
 use DVDoug\BoxPacker\Test\TestBox;
 use DVDoug\BoxPacker\Test\TestItem;
@@ -18,6 +19,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+use function array_column;
 use function array_filter;
 use function array_map;
 use function count;
@@ -267,6 +269,52 @@ class OverhangPackingTest extends TestCase
         self::assertSame(1018, max(array_map(static fn (PackedItem $item) => $item->x + $item->width, $limited)));
     }
 
+    public function testPlacementCallbacksAreAskedInTheDeckFrame(): void
+    {
+        // Big (1050 wide) only fits hanging the whole left allowance of 50 over, so its start position is x = -50; Small
+        // (cap 22 across its 150 side) goes against the left edge in the band; Sheet is flat, so placed at the end
+        $box = self::pallet(new AllowedOverhang(left: 50), 1000, 800, 300);
+        $big = new ConstrainedPlacementRecordingTestItem('Big', 1050, 300, 100, 1, Rotation::KeepFlat);
+        $small = new ConstrainedPlacementRecordingTestItem('Small', 200, 150, 100, 1, Rotation::KeepFlat);
+        $sheet = new ConstrainedPlacementRecordingTestItem('Sheet', 1050, 300, 0, 1, Rotation::KeepFlat);
+        $items = new ItemList();
+        $items->insert($big);
+        $items->insert($small, 6);
+        $items->insert($sheet);
+
+        $packedBox = self::thorough($box, $items);
+
+        self::assertCount(8, $packedBox->items);
+        self::assertValid($packedBox);
+        foreach ($packedBox->items as $packedItem) {
+            $recorder = $packedItem->item;
+            self::assertInstanceOf(ConstrainedPlacementRecordingTestItem::class, $recorder);
+            self::assertContains([$packedItem->x, $packedItem->y, $packedItem->z, $packedItem->width, $packedItem->length, $packedItem->depth], array_column($recorder->calls, 'proposal'));
+        }
+
+        $inTheBand = false;
+        foreach ([$big, $small, $sheet] as $recorder) {
+            foreach ($recorder->calls as ['proposal' => $proposal, 'context' => $context]) {
+                $inTheBand = $inTheBand || ($proposal[0] < 0 && $context !== []);
+                $contextItems = new PackedItemList();
+                foreach ($context as $contextItem) {
+                    $contextItems->insert($contextItem);
+                }
+                self::assertSame([], PackingValidator::problems(new PackedBox($box, $contextItems)));
+            }
+        }
+        self::assertTrue($inTheBand, 'a block in the band past the left edge was proposed');
+
+        // the stability probes, in the empty box at the start positions: as far left as the item must go, and z = 0
+        self::assertSame(['proposal' => [-50, 0, 0, 1050, 300, 100], 'context' => []], $big->calls[0]);
+        self::assertSame(['proposal' => [0, 0, 0, 200, 150, 100], 'context' => []], $small->calls[0]);
+        self::assertSame(['proposal' => [-50, 0, 0, 1050, 300, 0], 'context' => []], $sheet->calls[0]);
+        // and the flat item, placed after everything else at its start position
+        $lastCall = $sheet->calls[count($sheet->calls) - 1];
+        self::assertSame([-50, 0, 0, 1050, 300, 0], $lastCall['proposal']);
+        self::assertCount(7, $lastCall['context']);
+    }
+
     public function testFlatItems(): void
     {
         // a sheet that only fits with the overhang, and items with no size at all
@@ -318,6 +366,34 @@ class OverhangPackingTest extends TestCase
             self::assertValid($packedBox, 0.5);
             self::assertGreaterThanOrEqual($deckOnly->getUsedVolume(), $packedBox->getUsedVolume());
         }
+    }
+
+    public function testAllowancesBeyondTheLargestCapChangeNothing(): void
+    {
+        // the largest extent across any edge is D's 1050, whose cap of 157 is all that any item can use; with 1,000,000
+        // the envelope would be far wider than MAX_FILLABLE_TABLE, and Thorough would lose its gap scoring
+        $items = new ItemList();
+        $items->insert(new TestItem('A', 300, 200, 150, 10, Rotation::BestFit), 7);
+        $items->insert(new TestItem('B', 420, 260, 110, 10, Rotation::KeepFlat), 5);
+        $items->insert(new TestItem('C', 120, 90, 60, 10, Rotation::BestFit), 20);
+        $items->insert(new TestItem('D', 1050, 300, 100, 10, Rotation::KeepFlat), 2);
+        $tight = self::pallet(new AllowedOverhang(157, 157, 157, 157), 1000, 800, 600);
+        $huge = self::pallet(new AllowedOverhang(1000000, 1000000, 1000000, 1000000), 1000, 800, 600);
+
+        foreach ([self::thorough(...), self::fast(...)] as $pack) {
+            $packedBox = $pack($huge, $items, 0.5);
+            self::assertValid($packedBox, 0.5);
+            self::assertSame(self::sequence($pack($tight, $items, 0.5)), self::sequence($packedBox));
+        }
+
+        // the block search on its own (a VolumePacker could keep the layer packer's packing of the deck for both)
+        $packings = [];
+        foreach ([$tight, $huge] as $box) {
+            $blockPacker = new BlockPacker($box, $items);
+            $blockPacker->setMinimumSupport(0.5);
+            $packings[] = self::sequence($blockPacker->pack());
+        }
+        self::assertSame($packings[0], $packings[1]);
     }
 
     public function testStrictOrderingPacksTheDeckOnly(): void
@@ -425,5 +501,15 @@ class OverhangPackingTest extends TestCase
         sort($placements);
 
         return $placements;
+    }
+
+    /**
+     * Placements in the order they were packed.
+     *
+     * @return list<string>
+     */
+    private static function sequence(PackedBox $packedBox): array
+    {
+        return array_map(static fn (PackedItem $item) => "{$item->item->getDescription()} {$item->x},{$item->y},{$item->z} {$item->width}x{$item->length}x{$item->depth}", iterator_to_array($packedBox->items, false));
     }
 }

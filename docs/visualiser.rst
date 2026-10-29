@@ -15,8 +15,8 @@ Visualiser
     visualiser is included below. You can make use of it by calling the ``generateVisualisationURL()`` method on either
     a ``PackedBox`` or a ``PackedBoxList`` which will generate a custom URL for this page.
 
-For boxes with :doc:`allowed overhang<overhang>`, the visualiser draws the real deck outline and a faint envelope
-outline, and spaces boxes using the envelope so overhanging items stay in view.
+    For boxes with :doc:`allowed overhang<overhang>`, the visualiser draws the real deck outline and a faint envelope
+    outline, and spaces boxes using the envelope so overhanging items stay in view.
 
 .. raw:: html
 

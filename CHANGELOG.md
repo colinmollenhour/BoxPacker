@@ -2,10 +2,23 @@
 
 ## [4.5.0] - Unreleased
 ### Added
-- Opt-in allowed overhang for pallets with the new `OverhangBox` interface and `AllowedOverhang` value object:
-  per-edge allowances with a 15% cap per item at every height, supported by Thorough and Fast while keeping
-  utilisation and default cost based on the real deck. Packed-box JSON includes `box.allowedOverhang` and
-  visualiser URLs include an optional allowance tuple when non-zero; the visualiser draws the deck and envelope
+- Opt-in allowed overhang for pallets: a box implementing the new `OverhangBox` interface returns an `AllowedOverhang`
+  value object with left, right, front and back allowances
+- Each item may hang over an edge by at most the smaller of the allowance and 15% of its own extent across that edge,
+  at every height. Thorough searches the envelope within those caps; Fast also runs a greedy block search that uses
+  them and keeps whichever of that and its usual packing on the deck uses more volume. Utilisation, the default cost
+  and the default box order stay based on the real deck
+- Packed-box JSON includes `box.allowedOverhang`, and visualiser URLs an optional `[left, right, front, back]` tuple,
+  when the allowance is non-zero; the visualiser draws the deck and the envelope
+
+### Changed
+- For a box with a non-zero allowed overhang only:
+  - `PackedItem` x and y (and the positions proposed to `ConstrainedPlacementItem::canBePacked()`) can be negative or
+    end past the inner width or length
+  - `getUsedWidth()` and `getUsedLength()` include the overhang, so `getRemainingWidth()` and `getRemainingLength()`
+    can be negative; as the items can take up more than the inner volume, `getUnusedVolume()` can be negative too and
+    volume utilisation can exceed 100%
+  - `setMinimumSupport()` also applies to the Fast strategy's block search
 
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added

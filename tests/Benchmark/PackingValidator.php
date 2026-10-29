@@ -34,11 +34,6 @@ use function sort;
 final class PackingValidator
 {
     /**
-     * The overhang rule's per-item limit, as a percentage of the item's extent across the edge.
-     */
-    private const OVERHANG_PERCENT = 15;
-
-    /**
      * @return list<string> problems found (empty = valid)
      */
     public static function problems(PackedBox $packedBox): array
@@ -119,7 +114,7 @@ final class PackingValidator
 
     /**
      * How a square item breaks the overhang rules, if it does: past an edge by more than the allowance, or by more than
-     * 15 % of its extent across the edge (100 × overhang <= 15 × extent, exactly in integers).
+     * 15 % of its extent across the edge (see {@see limit()}).
      *
      * @return list<string>
      */
@@ -136,7 +131,7 @@ final class PackingValidator
             if ($overhang > $edgeAllowance) {
                 $problems[] = "hangs {$overhang} over the {$edge} edge, more than its allowance of {$edgeAllowance}";
             }
-            if ($overhang > 0 && 100 * $overhang > self::OVERHANG_PERCENT * $extent) {
+            if ($overhang > 0 && $overhang > self::limit($extent)) {
                 $problems[] = "hangs {$overhang} over the {$edge} edge, more than 15 % of its extent of {$extent}";
             }
         }
@@ -156,14 +151,26 @@ final class PackingValidator
 
             return AngledGeometry::intersectionArea(AngledGeometry::footprint($item), [[0.0, 0.0], [(float) $width, 0.0], [(float) $width, (float) $length], [0.0, (float) $length]]);
         }
-        $limitX = intdiv(self::OVERHANG_PERCENT * $item->width, 100);
-        $limitY = intdiv(self::OVERHANG_PERCENT * $item->length, 100);
+        $limitX = self::limit($item->width);
+        $limitY = self::limit($item->length);
         $x1 = max($item->x, -min($allowance->left, $limitX));
         $x2 = min($item->x + $item->width, $width + min($allowance->right, $limitX));
         $y1 = max($item->y, -min($allowance->front, $limitY));
         $y2 = min($item->y + $item->length, $length + min($allowance->back, $limitY));
 
         return $x2 > $x1 && $y2 > $y1 ? (float) (($x2 - $x1) * ($y2 - $y1)) : 0.0;
+    }
+
+    /**
+     * The most an item may hang over an edge for the 15 % rule: 15 % of its extent across the edge, rounded down (an
+     * overhang o is within it if and only if 100 o <= 15 e). Worked out as 3 e / 20 from the quotient and remainder of
+     * e / 20, so that no product overflows however large the extent.
+     */
+    private static function limit(int $extent): int
+    {
+        $twentieths = intdiv($extent, 20);
+
+        return $twentieths * 3 + intdiv(($extent - $twentieths * 20) * 3, 20);
     }
 
     private static function orientationAllowed(PackedItem $packedItem): bool

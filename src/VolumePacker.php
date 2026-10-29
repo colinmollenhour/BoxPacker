@@ -202,7 +202,9 @@ class VolumePacker implements LoggerAwareInterface
         }
 
         if ($this->useThorough()) {
-            return $this->packThoroughWithFallback($this->packFastForThorough(...));
+            // the layer packer alone, on the deck even for a box with an allowed overhang: Fast's greedy block search
+            // for such a box would only repeat the search's own first greedy completion
+            return $this->packThoroughWithFallback($this->packFast(...));
         }
 
         return $this->packFastRouted();
@@ -220,15 +222,6 @@ class VolumePacker implements LoggerAwareInterface
         }
 
         return $this->needsAngledPlacement() ? $this->packAngledFast() : $this->packFast();
-    }
-
-    /**
-     * The fast packing the Thorough strategy compares its own with (only for a box with an allowed overhang is that
-     * anything other than the layer packer).
-     */
-    private function packFastForThorough(): PackedBox
-    {
-        return $this->usesOverhangBlockSearch() ? $this->packOverhangFast() : $this->packFast();
     }
 
     /**
@@ -251,7 +244,8 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Fast strategy for a box with an allowed overhang: a greedy block search (which uses the overhang) or the layer
-     * packer (which packs the deck alone), whichever packs more.
+     * packer (which packs the deck alone), whichever packs more volume (or as much, but more items). So it never packs
+     * less volume than the layer packer on the deck alone, though it may pack fewer items.
      */
     private function packOverhangFast(): PackedBox
     {
