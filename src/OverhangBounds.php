@@ -38,6 +38,10 @@ final readonly class OverhangBounds
         public int $sides,
         public int $frontAndBack,
     ) {
+        // AllowedOverhang's constructor rejects these, but an instance can be made without it (by unserialize())
+        if ($sides < 0 || $frontAndBack < 0) {
+            throw new InvalidArgumentException("Allowed overhang cannot be negative (sides {$sides}, frontAndBack {$frontAndBack})");
+        }
         if ($sides > intdiv(PHP_INT_MAX - $width, 2) || $frontAndBack > intdiv(PHP_INT_MAX - $length, 2)) {
             throw new InvalidArgumentException('Allowed overhang is too large: the box with its overhang would be wider or longer than can be represented');
         }
@@ -88,9 +92,11 @@ final readonly class OverhangBounds
 
     /**
      * Volume the items in the box could take up at most: that of the box with its overhang (the envelope) if it has
-     * one, else the inner volume.
+     * one, else the inner volume. The envelope's volume is always an int (an allowance too large for that makes packing
+     * throw), but the inner volume of any other box is, as it always was, the product of its inner dimensions: a float
+     * if that is too large for an int.
      */
-    public static function capacityVolume(Box $box): int
+    public static function capacityVolume(Box $box): int|float
     {
         return self::forBox($box)?->envelopeVolume() ?? $box->getInnerWidth() * $box->getInnerLength() * $box->getInnerDepth();
     }
@@ -140,6 +146,25 @@ final readonly class OverhangBounds
     public function endCap(int $length): int
     {
         return self::cap($this->frontAndBack, $length);
+    }
+
+    /**
+     * Whether the item may hang over an edge in any orientation its rotation allows (fitting the box or not): whether
+     * its cap is above 0 for the longest extent it can have across some edge. If no item may, the overhang cannot be
+     * used.
+     */
+    public function canHangOver(Item $item): bool
+    {
+        $width = $item->getWidth();
+        $length = $item->getLength();
+        [$acrossSides, $acrossEnds] = match ($item->getAllowedRotation()) {
+            Rotation::Never => [$width, $length],
+            Rotation::KeepFlat => [max($width, $length), max($width, $length)],
+            Rotation::BestFit => [max($width, $length, $item->getDepth()), max($width, $length, $item->getDepth())],
+        };
+
+        // a cap never decreases with the extent
+        return $this->sideCap($acrossSides) > 0 || $this->endCap($acrossEnds) > 0;
     }
 
     /**

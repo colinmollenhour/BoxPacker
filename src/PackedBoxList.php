@@ -144,7 +144,8 @@ class PackedBoxList implements IteratorAggregate, Countable, JsonSerializable
     }
 
     /**
-     * Get volume utilisation of the set of packed boxes.
+     * Get volume utilisation of the set of packed boxes, as a percentage of their inner volume (so over 100 if items
+     * hanging over the edges of boxes with an allowed overhang take up more than that).
      */
     public function getVolumeUtilisation(): float
     {
