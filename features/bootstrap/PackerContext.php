@@ -89,7 +89,7 @@ class PackerContext implements Context
     }
 
     /**
-     * @Given /^there is a box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm left, (\d+)mm right, (\d+)mm front and (\d+)mm back$/
+     * @Given /^there is a box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm at the sides and (\d+)mm at the front and back$/
      */
     public function thereIsABoxWithAnAllowedOverhang(
         $boxType,
@@ -101,17 +101,15 @@ class PackerContext implements Context
         $innerLength,
         $innerDepth,
         $maxWeight,
-        $left,
-        $right,
-        $front,
-        $back
+        $sides,
+        $frontAndBack
     ): void {
-        $box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang($left, $right, $front, $back));
+        $box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang(sides: $sides, frontAndBack: $frontAndBack));
         $this->boxList->insert($box);
     }
 
     /**
-     * @Given /^the box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm left, (\d+)mm right, (\d+)mm front and (\d+)mm back$/
+     * @Given /^the box "([^"]+)", which has external dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d × (\d+)g and internal dimensions (\d+)mm w × (\d+)mm l × (\d+)mm d and has a max weight of (\d+)g and an allowed overhang of (\d+)mm at the sides and (\d+)mm at the front and back$/
      */
     public function theBoxWithAnAllowedOverhang(
         $boxType,
@@ -123,12 +121,10 @@ class PackerContext implements Context
         $innerLength,
         $innerDepth,
         $maxWeight,
-        $left,
-        $right,
-        $front,
-        $back
+        $sides,
+        $frontAndBack
     ): void {
-        $this->box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang($left, $right, $front, $back));
+        $this->box = new OverhangTestBox($boxType, $outerWidth, $outerLength, $outerDepth, $emptyWeight, $innerWidth, $innerLength, $innerDepth, $maxWeight, new AllowedOverhang(sides: $sides, frontAndBack: $frontAndBack));
     }
 
     /**
@@ -215,6 +211,26 @@ class PackerContext implements Context
         }
 
         Assert::assertEquals($qty, $foundItems);
+    }
+
+    /**
+     * @Then /^the packed box's items should reach from (-?\d+)mm to (-?\d+)mm across its width and from (-?\d+)mm to (-?\d+)mm along its length$/
+     */
+    public function thePackedBoxsItemsShouldReach(
+        $minX,
+        $maxX,
+        $minY,
+        $maxY
+    ): void {
+        $xs = $ys = [];
+        foreach ($this->packedBox->items as $packedItem) {
+            $xs[] = $packedItem->x;
+            $xs[] = $packedItem->x + $packedItem->boundingWidth;
+            $ys[] = $packedItem->y;
+            $ys[] = $packedItem->y + $packedItem->boundingLength;
+        }
+
+        Assert::assertSame([(int) $minX, (int) $maxX, (int) $minY, (int) $maxY], [\min($xs), \max($xs), \min($ys), \max($ys)]);
     }
 
     /**

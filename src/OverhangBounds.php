@@ -11,14 +11,18 @@ namespace DVDoug\BoxPacker;
 
 use InvalidArgumentException;
 
+use function assert;
 use function intdiv;
+use function max;
 use function min;
 
 use const PHP_INT_MAX;
+use const PHP_INT_MIN;
 
 /**
  * The allowed overhang of one box as used while packing it: the deck (the box's inner width, length and depth) and
- * the four edge allowances, with the per-item caps worked out from them. Coordinates are relative to the deck.
+ * the two allowances (sides, at x = 0 and x = width; front and back, at y = 0 and y = length), with the per-item caps
+ * worked out from them. Coordinates are relative to the deck.
  *
  * Only boxes that opt in with a non-zero allowance have one, so that every other box takes the code paths it always
  * has.
@@ -31,17 +35,14 @@ final readonly class OverhangBounds
         public int $width,
         public int $length,
         public int $depth,
-        public int $left,
-        public int $right,
-        public int $front,
-        public int $back,
+        public int $sides,
+        public int $frontAndBack,
     ) {
-        if ($left > PHP_INT_MAX - $width || $right > PHP_INT_MAX - $width - $left
-            || $front > PHP_INT_MAX - $length || $back > PHP_INT_MAX - $length - $front) {
+        if ($sides > intdiv(PHP_INT_MAX - $width, 2) || $frontAndBack > intdiv(PHP_INT_MAX - $length, 2)) {
             throw new InvalidArgumentException('Allowed overhang is too large: the box with its overhang would be wider or longer than can be represented');
         }
-        $envelopeWidth = $width + $left + $right;
-        $envelopeLength = $length + $front + $back;
+        $envelopeWidth = $this->envelopeWidth();
+        $envelopeLength = $this->envelopeLength();
         if (($envelopeWidth > 0 && $envelopeLength > intdiv(PHP_INT_MAX, $envelopeWidth))
             || ($envelopeWidth * $envelopeLength > 0 && $depth > intdiv(PHP_INT_MAX, $envelopeWidth * $envelopeLength))) {
             throw new InvalidArgumentException('Allowed overhang is too large: the volume of the box with its overhang cannot be represented');
@@ -61,7 +62,7 @@ final readonly class OverhangBounds
             return null;
         }
 
-        return new self($box->getInnerWidth(), $box->getInnerLength(), $box->getInnerDepth(), $allowance->left, $allowance->right, $allowance->front, $allowance->back);
+        return new self($box->getInnerWidth(), $box->getInnerLength(), $box->getInnerDepth(), $allowance->sides, $allowance->frontAndBack);
     }
 
     /**
@@ -96,7 +97,8 @@ final readonly class OverhangBounds
 
     /**
      * What a box's entry in a visualiser URL has after its items: [[left, right, front, back]] for a box with an
-     * allowed overhang, nothing for any other (so that its entry is as it always was).
+     * allowed overhang (the sides allowance at both sides, the front and back one at both ends: the visualiser draws
+     * each edge), nothing for any other (so that its entry is as it always was).
      *
      * @return list<array{0: int, 1: int, 2: int, 3: int}>
      */
@@ -104,7 +106,7 @@ final readonly class OverhangBounds
     {
         $bounds = self::forBox($box);
 
-        return $bounds === null ? [] : [[$bounds->left, $bounds->right, $bounds->front, $bounds->back]];
+        return $bounds === null ? [] : [[$bounds->sides, $bounds->sides, $bounds->frontAndBack, $bounds->frontAndBack]];
     }
 
     /**
@@ -124,24 +126,20 @@ final readonly class OverhangBounds
         return min($allowance, $itemCap);
     }
 
-    public function capLeft(int $width): int
+    /**
+     * The most an item of this width may hang over each side (the left and the right edge).
+     */
+    public function sideCap(int $width): int
     {
-        return self::cap($this->left, $width);
+        return self::cap($this->sides, $width);
     }
 
-    public function capRight(int $width): int
+    /**
+     * The most an item of this length may hang over each end (the front and the back edge).
+     */
+    public function endCap(int $length): int
     {
-        return self::cap($this->right, $width);
-    }
-
-    public function capFront(int $length): int
-    {
-        return self::cap($this->front, $length);
-    }
-
-    public function capBack(int $length): int
-    {
-        return self::cap($this->back, $length);
+        return self::cap($this->frontAndBack, $length);
     }
 
     /**
@@ -149,8 +147,8 @@ final readonly class OverhangBounds
      */
     public function fits(int $width, int $length): bool
     {
-        return $width <= $this->width + $this->capLeft($width) + $this->capRight($width)
-            && $length <= $this->length + $this->capFront($length) + $this->capBack($length);
+        return $width <= $this->width + 2 * $this->sideCap($width)
+            && $length <= $this->length + 2 * $this->endCap($length);
     }
 
     /**
@@ -158,10 +156,13 @@ final readonly class OverhangBounds
      */
     public function admits(int $x, int $y, int $width, int $length): bool
     {
-        return $x >= -$this->capLeft($width)
-            && $x + $width <= $this->width + $this->capRight($width)
-            && $y >= -$this->capFront($length)
-            && $y + $length <= $this->length + $this->capBack($length);
+        $sideCap = $this->sideCap($width);
+        $endCap = $this->endCap($length);
+
+        return $x >= -$sideCap
+            && $x + $width <= $this->width + $sideCap
+            && $y >= -$endCap
+            && $y + $length <= $this->length + $endCap;
     }
 
     /**
@@ -181,20 +182,56 @@ final readonly class OverhangBounds
     }
 
     /**
-     * A legal x for an item of this width in the empty box (0 if it fits the deck's width, else as far left as its
-     * right cap requires). Only meaningful if the item fits.
+     * Where an item of this width goes on its own in the empty box: x = 0 if it fits the deck's width, else hanging
+     * over both sides equally (as {@see centringShift()} would place it). Only meaningful if the item fits.
      */
     public function startX(int $width): int
     {
-        return min(0, $this->width + $this->capRight($width) - $width);
+        return self::start($this->width, $width, $this->sideCap($width));
     }
 
     /**
-     * A legal y for an item of this length in the empty box, as {@see startX()}.
+     * Where an item of this length goes on its own in the empty box, as {@see startX()}.
      */
     public function startY(int $length): int
     {
-        return min(0, $this->length + $this->capBack($length) - $length);
+        return self::start($this->length, $length, $this->endCap($length));
+    }
+
+    /**
+     * How far to move a packing (in the deck's frame) along x and along y to balance its overhang: on each axis on which
+     * it hangs over an edge, so that the larger of its two overhangs there (a gap counting as a negative overhang) is
+     * as small as can be with every item still within its caps at both edges (items at an angle within the deck). Of
+     * two equally good moves, the smaller. Nothing on an axis on which nothing hangs over.
+     *
+     * Moving every item by the same amount keeps every item's support and keeps them apart, so only the caps limit it.
+     *
+     * @param  iterable<PackedItem>  $items
+     * @return array{0: int, 1: int}
+     */
+    public function centringShift(iterable $items): array
+    {
+        $minX = $minY = PHP_INT_MAX;
+        $maxX = $maxY = $loX = $loY = PHP_INT_MIN;
+        $hiX = $hiY = PHP_INT_MAX;
+        foreach ($items as $item) {
+            [$capX, $capY] = $item->isAngled() ? [0, 0] : [$this->sideCap($item->width), $this->endCap($item->length)];
+            $x2 = $item->x + $item->boundingWidth;
+            $y2 = $item->y + $item->boundingLength;
+            $minX = min($minX, $item->x);
+            $minY = min($minY, $item->y);
+            $maxX = max($maxX, $x2);
+            $maxY = max($maxY, $y2);
+            $loX = max($loX, -$capX - $item->x);
+            $loY = max($loY, -$capY - $item->y);
+            $hiX = min($hiX, $this->width + $capX - $x2);
+            $hiY = min($hiY, $this->length + $capY - $y2);
+        }
+        if ($minX === PHP_INT_MAX) {
+            return [0, 0];
+        }
+
+        return [self::shift($this->width, $minX, $maxX, $loX, $hiX), self::shift($this->length, $minY, $maxY, $loY, $hiY)];
     }
 
     /**
@@ -202,7 +239,7 @@ final readonly class OverhangBounds
      */
     public function envelopeWidth(): int
     {
-        return $this->width + $this->left + $this->right;
+        return $this->width + 2 * $this->sides;
     }
 
     /**
@@ -210,11 +247,44 @@ final readonly class OverhangBounds
      */
     public function envelopeLength(): int
     {
-        return $this->length + $this->front + $this->back;
+        return $this->length + 2 * $this->frontAndBack;
     }
 
     public function envelopeVolume(): int
     {
         return $this->envelopeWidth() * $this->envelopeLength() * $this->depth;
+    }
+
+    /**
+     * The position along an axis of the given span of one item of the given extent and cap, alone: at 0 if it fits
+     * the span, else as far towards 0 as its far cap requires, then balanced.
+     */
+    private static function start(int $span, int $extent, int $cap): int
+    {
+        $position = min(0, $span + $cap - $extent);
+
+        return $position + self::shift($span, $position, $position + $extent, -$cap - $position, $span + $cap - $position - $extent);
+    }
+
+    /**
+     * The move along one axis of the given span that balances a load reaching from $min to $max, given that it must lie
+     * between $lo and $hi (see {@see centringShift()}).
+     */
+    private static function shift(int $span, int $min, int $max, int $lo, int $hi): int
+    {
+        $before = -$min; // overhang at the low edge (negative: a gap)
+        $after = $max - $span; // and at the high edge
+        if ($before <= 0 && $after <= 0) {
+            return 0;
+        }
+        // the packing is within the caps, so not moving it is always possible
+        assert($lo <= 0 && $hi >= 0);
+        if ($lo > 0 || $hi < 0) {
+            return 0;
+        }
+
+        // the larger overhang, max(before - shift, after + shift), is least at (before - after) / 2; intdiv() rounds
+        // towards 0, so of the two best shifts when that is not whole, the smaller is taken
+        return max($lo, min($hi, intdiv($before - $after, 2)));
     }
 }

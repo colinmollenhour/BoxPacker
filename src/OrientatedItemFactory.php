@@ -242,7 +242,7 @@ class OrientatedItemFactory implements LoggerAwareInterface
         // differ in it apart all the same
         $overhang = OverhangBounds::forBox($this->box);
         if ($overhang !== null) {
-            $cacheKey .= "|{$overhang->left}|{$overhang->right}|{$overhang->front}|{$overhang->back}";
+            $cacheKey .= "|{$overhang->sides}|{$overhang->frontAndBack}";
         }
 
         if (isset(static::$emptyBoxStableItemOrientationCache[$cacheKey])) {

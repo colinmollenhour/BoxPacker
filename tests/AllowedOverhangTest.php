@@ -12,12 +12,15 @@ namespace DVDoug\BoxPacker;
 use DVDoug\BoxPacker\Test\OverhangTestBox;
 use DVDoug\BoxPacker\Test\TestBox;
 use DVDoug\BoxPacker\Test\ZeroOverhangBox;
+use ArgumentCountError;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+use function array_map;
 use function intdiv;
+use function iterator_to_array;
 use function json_encode;
 
 use const PHP_INT_MAX;
@@ -34,38 +37,83 @@ class AllowedOverhangTest extends TestCase
         return $bounds;
     }
 
+    public function testConstructor(): void
+    {
+        $allowance = new AllowedOverhang(sides: 150, frontAndBack: 300);
+        self::assertSame(150, $allowance->sides);
+        self::assertSame(300, $allowance->frontAndBack);
+        self::assertSame([0, 0], [(new AllowedOverhang())->sides, (new AllowedOverhang())->frontAndBack]);
+        self::assertSame([150, 300], [(new AllowedOverhang(150, 300))->sides, (new AllowedOverhang(150, 300))->frontAndBack]);
+    }
+
     /**
-     * @return array<string, array{int, int, int, int}>
+     * @return array<string, array{int, int}>
      */
     public static function negativeAllowances(): array
     {
         return [
-            'left' => [-1, 0, 0, 0],
-            'right' => [0, -1, 0, 0],
-            'front' => [0, 0, -1, 0],
-            'back' => [0, 0, 0, -1],
+            'sides' => [-1, 0],
+            'front and back' => [0, -1],
         ];
     }
 
     #[DataProvider('negativeAllowances')]
-    public function testNegativeAllowanceIsRejected(int $left, int $right, int $front, int $back): void
+    public function testNegativeAllowanceIsRejected(int $sides, int $frontAndBack): void
     {
         $this->expectException(InvalidArgumentException::class);
-        new AllowedOverhang($left, $right, $front, $back);
+        $this->expectExceptionMessage("sides {$sides}, frontAndBack {$frontAndBack}");
+        new AllowedOverhang(sides: $sides, frontAndBack: $frontAndBack);
+    }
+
+    /**
+     * @return array<string, array{list<int>}>
+     */
+    public static function tooManyArguments(): array
+    {
+        return [
+            'three' => [[150, 150, 300]],
+            'four (the removed left, right, front, back)' => [[150, 150, 300, 300]],
+        ];
+    }
+
+    /**
+     * @param list<int> $arguments
+     */
+    #[DataProvider('tooManyArguments')]
+    public function testTheFourEdgeFormIsRejected(array $arguments): void
+    {
+        $this->expectException(ArgumentCountError::class);
+        $this->expectExceptionMessage('sides and frontAndBack');
+        new AllowedOverhang(...$arguments);
     }
 
     public function testIsZero(): void
     {
         self::assertTrue((new AllowedOverhang())->isZero());
-        self::assertFalse((new AllowedOverhang(left: 1))->isZero());
-        self::assertFalse((new AllowedOverhang(right: 1))->isZero());
-        self::assertFalse((new AllowedOverhang(front: 1))->isZero());
-        self::assertFalse((new AllowedOverhang(back: 1))->isZero());
+        self::assertTrue((new AllowedOverhang(sides: 0, frontAndBack: 0))->isZero());
+        self::assertFalse((new AllowedOverhang(sides: 1))->isZero());
+        self::assertFalse((new AllowedOverhang(frontAndBack: 1))->isZero());
     }
 
     public function testJsonShape(): void
     {
-        self::assertSame('{"left":1,"right":2,"front":3,"back":4}', json_encode(new AllowedOverhang(1, 2, 3, 4)));
+        self::assertSame('{"sides":1,"frontAndBack":2}', json_encode(new AllowedOverhang(sides: 1, frontAndBack: 2)));
+    }
+
+    public function testEachAllowanceAppliesAtBothOfItsEdges(): void
+    {
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 40, frontAndBack: 70));
+        self::assertSame(40, $bounds->sideCap(1000));
+        self::assertSame(70, $bounds->endCap(1000));
+        self::assertTrue($bounds->admits(-40, -70, 1000, 1000));
+        self::assertTrue($bounds->admits(40, 70, 1000, 1000));
+        self::assertFalse($bounds->admits(-41, 0, 1000, 1000));
+        self::assertFalse($bounds->admits(41, 0, 1000, 1000));
+        self::assertFalse($bounds->admits(0, -71, 1000, 1000));
+        self::assertFalse($bounds->admits(0, 71, 1000, 1000));
+        self::assertSame(1080, $bounds->envelopeWidth());
+        self::assertSame(1140, $bounds->envelopeLength());
+        self::assertSame([[40, 40, 70, 70]], OverhangBounds::visualiserElements(new OverhangTestBox('Box', 1000, 1000, 1000, 0, 1000, 1000, 1000, 1000, new AllowedOverhang(sides: 40, frontAndBack: 70))));
     }
 
     public function testOnlyANonZeroAllowanceIsActive(): void
@@ -74,10 +122,10 @@ class AllowedOverhangTest extends TestCase
         self::assertNull(OverhangBounds::forBox($plain));
         self::assertNull(OverhangBounds::forBox(new ZeroOverhangBox($plain)));
         self::assertNull(OverhangBounds::forBox(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang())));
-        self::assertNotNull(OverhangBounds::forBox(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(back: 1))));
+        self::assertNotNull(OverhangBounds::forBox(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(frontAndBack: 1))));
 
         self::assertSame(1000000, OverhangBounds::capacityVolume($plain));
-        self::assertSame(110 * 125 * 100, OverhangBounds::capacityVolume(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(4, 6, 0, 25))));
+        self::assertSame(110 * 150 * 100, OverhangBounds::capacityVolume(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(sides: 5, frontAndBack: 25))));
     }
 
     public function testCapIsFifteenPercentRoundedDownExactly(): void
@@ -101,16 +149,18 @@ class AllowedOverhangTest extends TestCase
     public function testCapBoundaryFor2252(): void
     {
         // 15 % of 22.52" is 3.378": 3.37" may hang over, 3.38" may not
-        $bounds = self::bounds(4800, 4000, new AllowedOverhang(front: 400));
-        self::assertSame(337, $bounds->capFront(2252));
+        $bounds = self::bounds(4800, 4000, new AllowedOverhang(frontAndBack: 400));
+        self::assertSame(337, $bounds->endCap(2252));
         self::assertTrue($bounds->admits(0, -337, 1000, 2252));
         self::assertFalse($bounds->admits(0, -338, 1000, 2252));
+        self::assertTrue($bounds->admits(0, 4000 + 337 - 2252, 1000, 2252));
+        self::assertFalse($bounds->admits(0, 4000 + 338 - 2252, 1000, 2252));
     }
 
     public function testSmallItemsGainLittle(): void
     {
         // a 12" cube on a pallet allowing 3" may hang over by 1.8" at most
-        $bounds = self::bounds(4800, 4000, new AllowedOverhang(300, 300, 300, 300));
+        $bounds = self::bounds(4800, 4000, new AllowedOverhang(sides: 300, frontAndBack: 300));
         foreach ([[-180, 0], [4800 + 180 - 1200, 0], [0, -180], [0, 4000 + 180 - 1200]] as [$x, $y]) {
             self::assertTrue($bounds->admits($x, $y, 1200, 1200));
         }
@@ -121,20 +171,22 @@ class AllowedOverhangTest extends TestCase
 
     public function testExtentsUnderSevenHaveNoCap(): void
     {
-        $bounds = self::bounds(100, 100, new AllowedOverhang(50, 50, 50, 50));
+        $bounds = self::bounds(100, 100, new AllowedOverhang(sides: 50, frontAndBack: 50));
         for ($extent = 1; $extent < 7; ++$extent) {
-            self::assertSame(0, $bounds->capLeft($extent));
+            self::assertSame(0, $bounds->sideCap($extent));
+            self::assertSame(0, $bounds->endCap($extent));
             self::assertFalse($bounds->admits(-1, 0, $extent, $extent));
             self::assertFalse($bounds->admits(0, 100 - $extent + 1, $extent, $extent));
         }
-        self::assertSame(1, $bounds->capLeft(7));
+        self::assertSame(1, $bounds->sideCap(7));
         self::assertTrue($bounds->admits(-1, 0, 7, 7));
+        self::assertTrue($bounds->admits(0, 94, 7, 7));
     }
 
     public function testOneItemSpanningBothEdgesNeedsBothCaps(): void
     {
         // 1200 wide on a 1000 wide deck allowing 100 each side: only x = -100 puts each side within its cap
-        $bounds = self::bounds(1000, 1000, new AllowedOverhang(100, 100, 0, 0));
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100));
         self::assertTrue($bounds->fits(1200, 1000));
         self::assertFalse($bounds->fits(1201, 1000));
         self::assertTrue($bounds->admits(-100, 0, 1200, 1000));
@@ -143,7 +195,7 @@ class AllowedOverhangTest extends TestCase
         self::assertSame(-100, $bounds->startX(1200));
 
         // with larger allowances, the item's own caps bind: 1428 fits a 1000 deck (caps 214 each side), 1429 does not
-        $bounds = self::bounds(1000, 1000, new AllowedOverhang(300, 300, 0, 0));
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 300));
         self::assertTrue($bounds->fits(1428, 1000));
         self::assertFalse($bounds->fits(1429, 1000));
         self::assertTrue($bounds->admits(-214, 0, 1428, 1000));
@@ -154,7 +206,7 @@ class AllowedOverhangTest extends TestCase
     public function testInARowOnlyTheEndItemsOverhang(): void
     {
         // four 270 wide items (caps 40) across a 1000 wide deck allowing 50 each side: 1080 = 1000 + 40 + 40
-        $bounds = self::bounds(1000, 100, new AllowedOverhang(50, 50, 0, 0));
+        $bounds = self::bounds(1000, 100, new AllowedOverhang(sides: 50));
         $xs = [-40, 230, 500, 770];
         foreach ($xs as $x) {
             self::assertTrue($bounds->admits($x, 0, 270, 100));
@@ -164,31 +216,58 @@ class AllowedOverhangTest extends TestCase
 
         $items = new ItemList();
         $items->insert(new Test\TestItem('Item', 270, 100, 100, 1, Rotation::Never), 5);
-        $packer = new VolumePacker(new OverhangTestBox('Box', 1000, 100, 100, 0, 1000, 100, 100, 1000, new AllowedOverhang(50, 50, 0, 0)), $items);
+        $packer = new VolumePacker(new OverhangTestBox('Box', 1000, 100, 100, 0, 1000, 100, 100, 1000, new AllowedOverhang(sides: 50)), $items);
         $packer->setStrategy(PackingStrategy::Thorough);
         $packedBox = $packer->pack();
         self::assertCount(4, $packedBox->items);
         self::assertSame([], Benchmark\PackingValidator::problems($packedBox));
+        self::assertSame([], Benchmark\PackingValidator::centringProblems($packedBox));
         self::assertSame(1080, $packedBox->getUsedWidth());
+        self::assertSame($xs, array_map(static fn (PackedItem $item) => $item->x, iterator_to_array($packedBox->items, false)));
     }
 
-    public function testAsymmetricFrontAndBackWithBackZero(): void
+    /**
+     * @return array<string, array{AllowedOverhang, bool}>
+     */
+    public static function oneAxisOnly(): array
     {
-        $bounds = self::bounds(1000, 1000, new AllowedOverhang(front: 100));
-        self::assertSame(90, $bounds->capFront(600));
-        self::assertSame(0, $bounds->capBack(600));
-        self::assertTrue($bounds->admits(0, -90, 100, 600));
-        self::assertFalse($bounds->admits(0, -91, 100, 600));
-        self::assertTrue($bounds->admits(0, 400, 100, 600));
-        self::assertFalse($bounds->admits(0, 401, 100, 600));
-        self::assertTrue($bounds->fits(100, 1100));
-        self::assertFalse($bounds->fits(100, 1101));
-        self::assertSame(-100, $bounds->startY(1100));
+        return [
+            'sides only' => [new AllowedOverhang(sides: 100), true],
+            'front and back only' => [new AllowedOverhang(frontAndBack: 100), false],
+        ];
+    }
+
+    #[DataProvider('oneAxisOnly')]
+    public function testOneAllowanceZero(AllowedOverhang $allowance, bool $sides): void
+    {
+        // the other axis is the deck alone, at both of its edges
+        $bounds = self::bounds(1000, 1000, $allowance);
+        $at = static fn (int $along, int $across): array => $sides ? [$along, $across] : [$across, $along];
+        $size = static fn (int $along, int $across): array => $sides ? [$along, $across] : [$across, $along];
+        self::assertSame(90, $sides ? $bounds->sideCap(600) : $bounds->endCap(600));
+        self::assertSame(0, $sides ? $bounds->endCap(600) : $bounds->sideCap(600));
+        foreach ([[-90, true], [-91, false], [490, true], [491, false]] as [$position, $admitted]) {
+            self::assertSame($admitted, $bounds->admits(...$at($position, 0), ...$size(600, 100)));
+        }
+        self::assertTrue($bounds->admits(...$at(0, 900), ...$size(600, 100)));
+        self::assertFalse($bounds->admits(...$at(0, -1), ...$size(600, 100)));
+        self::assertFalse($bounds->admits(...$at(0, 901), ...$size(600, 100)));
+        self::assertTrue($bounds->fits(...$size(1200, 1000)));
+        self::assertFalse($bounds->fits(...$size(1201, 1000)));
+        self::assertFalse($bounds->fits(...$size(1000, 1001)));
+        self::assertSame(-100, $sides ? $bounds->startX(1200) : $bounds->startY(1200));
+        self::assertSame(0, $sides ? $bounds->startY(1000) : $bounds->startX(1000));
+
+        // a load hanging over on the axis with an allowance is balanced on it; the other axis is never moved
+        $item = new Test\TestItem('Item', 1100, 1100, 100, 1, Rotation::Never);
+        [$x, $y] = $at(-100, 0);
+        [$w, $l] = $size(1100, 1000);
+        self::assertSame($at(50, 0), $bounds->centringShift([new PackedItem($item, $x, $y, 0, $w, $l, 100)]));
     }
 
     public function testAngledItemsMustStayOnTheDeck(): void
     {
-        $bounds = self::bounds(1000, 1000, new AllowedOverhang(100, 100, 100, 100));
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
         $item = new Test\TestItem('Item', 1100, 100, 100, 1, Rotation::KeepFlat);
         $angled = new PackedItem($item, 0, 0, 0, 1100, 100, 100, 40.0);
         self::assertLessThanOrEqual(1000, $angled->boundingWidth);
@@ -200,21 +279,101 @@ class AllowedOverhangTest extends TestCase
         self::assertFalse($bounds->admitsPackedItem(new PackedItem($item, -100, 0, 901, 1100, 100, 100)));
     }
 
+    public function testTheLargestRepresentableEnvelopeIsAccepted(): void
+    {
+        // 100 + 2 × (PHP_INT_MAX - 101) / 2 rounded down = PHP_INT_MAX - 1 (PHP_INT_MAX is odd)
+        $bounds = self::bounds(100, 1, new AllowedOverhang(sides: intdiv(PHP_INT_MAX - 100, 2)), 1);
+        self::assertSame(PHP_INT_MAX - 1, $bounds->envelopeWidth());
+    }
+
     public function testEnvelopeWidthOverflowIsRejected(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        OverhangBounds::forBox(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(PHP_INT_MAX - 150, 100)));
+        OverhangBounds::forBox(new OverhangTestBox('Box', 101, 100, 100, 0, 101, 100, 100, 1000, new AllowedOverhang(sides: intdiv(PHP_INT_MAX - 100, 2))));
     }
 
     public function testEnvelopeLengthOverflowIsRejected(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        OverhangBounds::forBox(new OverhangTestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000, new AllowedOverhang(front: PHP_INT_MAX - 50, back: 100)));
+        OverhangBounds::forBox(new OverhangTestBox('Box', 100, 101, 100, 0, 100, 101, 100, 1000, new AllowedOverhang(frontAndBack: intdiv(PHP_INT_MAX - 100, 2))));
     }
 
     public function testEnvelopeVolumeOverflowIsRejected(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        OverhangBounds::forBox(new OverhangTestBox('Box', 1000000, 1000000, 1000000, 0, 1000000, 1000000, 1000000, 1000, new AllowedOverhang(10000000, 0, 10000000, 0)));
+        OverhangBounds::forBox(new OverhangTestBox('Box', 1000000, 1000000, 1000000, 0, 1000000, 1000000, 1000000, 1000, new AllowedOverhang(sides: 5000000, frontAndBack: 5000000)));
+    }
+
+    /**
+     * @return array<string, array{list<array{0: int, 1: int, 2: int, 3: int}>, array{0: int, 1: int}}>
+     */
+    public static function centringCases(): array
+    {
+        // each item [x, y, width, length] on a 1000 × 1000 deck allowing 200 at the sides and at the front and back
+        return [
+            'nothing' => [[], [0, 0]],
+            'on the deck, nothing hanging over' => [[[100, 50, 500, 500]], [0, 0]],
+            'flush with the deck' => [[[0, 0, 1000, 1000]], [0, 0]],
+            'balanced' => [[[-100, -100, 1200, 1200]], [0, 0]],
+            // 150 over the left, 3 over the right: 73.5 would balance them, so 73 (the smaller move)
+            'odd difference, moved right' => [[[-150, 0, 1153, 1000]], [73, 0]],
+            'odd difference, moved left' => [[[-3, 0, 1153, 1000]], [-73, 0]],
+            'even difference' => [[[-150, -10, 1150, 1030]], [75, -5]],
+            // hanging 100 over the front of a deck it fits: moved fully onto it, with equal gaps of 100
+            'onto the deck' => [[[0, -100, 1000, 800]], [0, 200]],
+            // the base may move 30 at most before the item on it (cap 15) hangs over the right by more than its cap
+            'limited by an item\'s caps' => [[[-150, 0, 1150, 1000], [885, 0, 100, 1000]], [30, 0]],
+            // the wide item is at its cap at the right, the narrow one at its cap at the left: no move is possible
+            'pinned by caps at both edges' => [[[22, 0, 1150, 500], [-15, 500, 100, 500]], [0, 0]],
+            // gaps but no overhang along y: only x is moved
+            'one axis only' => [[[-150, 100, 1150, 500]], [75, 0]],
+        ];
+    }
+
+    /**
+     * @param list<array{0: int, 1: int, 2: int, 3: int}> $placements
+     * @param array{0: int, 1: int}                       $shift
+     */
+    #[DataProvider('centringCases')]
+    public function testCentringShift(array $placements, array $shift): void
+    {
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 200, frontAndBack: 200));
+        $items = [];
+        foreach ($placements as [$x, $y, $width, $length]) {
+            $items[] = new PackedItem(new Test\TestItem('Item', $width, $length, 100, 1, Rotation::Never), $x, $y, 0, $width, $length, 100);
+        }
+        self::assertSame($shift, $bounds->centringShift($items));
+
+        // and once moved, the packing needs no further move
+        $moved = array_map(static fn (PackedItem $item) => new PackedItem($item->item, $item->x + $shift[0], $item->y + $shift[1], 0, $item->width, $item->length, 100), $items);
+        foreach ($moved as $item) {
+            self::assertTrue($bounds->admitsPackedItem($item));
+        }
+        self::assertSame([0, 0], $bounds->centringShift($moved));
+    }
+
+    public function testCentringKeepsAngledItemsOnTheDeck(): void
+    {
+        // a plank hanging 100 over the left could move 100 right, but the angled item beside it is already at the
+        // right edge of the deck
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
+        $plank = new PackedItem(new Test\TestItem('Plank', 700, 100, 100, 1, Rotation::Never), -100, 0, 0, 700, 100, 100);
+        $angled = new PackedItem(new Test\TestItem('Rod', 1100, 100, 100, 1, Rotation::KeepFlat), 0, 200, 0, 1100, 100, 100, 40.0);
+        self::assertLessThan(1000, $angled->boundingWidth);
+        $atRightEdge = new PackedItem($angled->item, 1000 - $angled->boundingWidth, 200, 0, 1100, 100, 100, 40.0);
+        self::assertSame([0, 0], $bounds->centringShift([$plank, $atRightEdge]));
+        // one unit of room on the deck: moved by that one unit
+        $oneUnitIn = new PackedItem($angled->item, 999 - $angled->boundingWidth, 200, 0, 1100, 100, 100, 40.0);
+        self::assertSame([1, 0], $bounds->centringShift([$plank, $oneUnitIn]));
+    }
+
+    public function testStartPositionsHangOverEquallyWhenTheyMust(): void
+    {
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
+        self::assertSame(0, $bounds->startX(1000));
+        self::assertSame(0, $bounds->startX(0));
+        self::assertSame(-50, $bounds->startX(1100));
+        self::assertSame(-50, $bounds->startY(1101)); // 101 to share, 51 at the front and 50 at the back would also do
+        self::assertSame(-100, $bounds->startX(1200));
     }
 }

@@ -62,6 +62,9 @@ use const PHP_INT_MIN;
  * fraction of its base. Rotation rules, the preference for stable orientations, the weight limit and placement
  * callbacks (ConstrainedPlacementItem) are honoured.
  *
+ * For a container with an allowed overhang (OverhangBox), items may hang over its edges within their caps, and the
+ * finished packing is moved to balance its overhang (see materialise()).
+ *
  * @internal
  */
 class BlockPacker implements LoggerAwareInterface
@@ -351,23 +354,21 @@ class BlockPacker implements LoggerAwareInterface
             ++$this->totalItems;
         }
 
-        // The search frame: the deck, widened at each edge by as much of the allowance as the largest cap there of any
-        // orientation can use (an allowance beyond that would only add space that no item can reach)
-        $left = $right = $front = $back = 0;
+        // The search frame: the deck, widened at each side and each end by as much of the allowance as the largest cap
+        // there of any orientation can use (an allowance beyond that would only add space that no item can reach)
+        $side = $end = 0;
         if ($this->overhang !== null) {
             foreach ($this->orientations as $orientations) {
                 foreach ($orientations as [$ow, $ol]) {
-                    $left = max($left, $this->overhang->capLeft($ow));
-                    $right = max($right, $this->overhang->capRight($ow));
-                    $front = max($front, $this->overhang->capFront($ol));
-                    $back = max($back, $this->overhang->capBack($ol));
+                    $side = max($side, $this->overhang->sideCap($ow));
+                    $end = max($end, $this->overhang->endCap($ol));
                 }
             }
         }
-        $this->deckX = $left;
-        $this->deckY = $front;
-        $this->boxWidth = $this->deckWidth + $left + $right;
-        $this->boxLength = $this->deckLength + $front + $back;
+        $this->deckX = $side;
+        $this->deckY = $end;
+        $this->boxWidth = $this->deckWidth + 2 * $side;
+        $this->boxLength = $this->deckLength + 2 * $end;
         if ($this->overhang !== null) {
             foreach ($this->orientations as $type => $orientations) {
                 $this->legalAreas[$type] = array_map(fn (array $orientation): array => $this->legalArea($orientation[0], $orientation[1]), $orientations);
@@ -1177,11 +1178,14 @@ class BlockPacker implements LoggerAwareInterface
         $overhang = $this->overhang;
         assert($overhang !== null);
 
+        $sideCap = $overhang->sideCap($width);
+        $endCap = $overhang->endCap($length);
+
         return [
-            $this->deckX - $overhang->capLeft($width),
-            $this->deckY - $overhang->capFront($length),
-            $this->deckX + $this->deckWidth + $overhang->capRight($width),
-            $this->deckY + $this->deckLength + $overhang->capBack($length),
+            $this->deckX - $sideCap,
+            $this->deckY - $endCap,
+            $this->deckX + $this->deckWidth + $sideCap,
+            $this->deckY + $this->deckLength + $endCap,
         ];
     }
 
@@ -1435,16 +1439,17 @@ class BlockPacker implements LoggerAwareInterface
      *
      * This is where positions leave the search, so they are given relative to the deck (the box's own footprint):
      * with an allowed overhang, the search frame is the deck widened by as much of each allowance as the items' caps
-     * can use (see $overhang), in which the deck starts at $deckX, $deckY.
+     * can use (see $overhang), in which the deck starts at $deckX, $deckY. The finished packing is then moved by the
+     * shift that balances its overhang (see {@see materialise()}); everything during the search uses no shift.
      *
      * @param  array<int, int|float>                                                         $candidate
      * @return list<array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int, 6: int, 7: float}>
      */
-    private function itemsOf(array $candidate): array
+    private function itemsOf(array $candidate, int $shiftX = 0, int $shiftY = 0): array
     {
         $type = $candidate[self::C_TYPE];
-        $x = $candidate[self::C_X] - $this->deckX;
-        $y = $candidate[self::C_Y] - $this->deckY;
+        $x = $candidate[self::C_X] - $this->deckX + $shiftX;
+        $y = $candidate[self::C_Y] - $this->deckY + $shiftY;
         $z = $candidate[self::C_Z];
         $items = [];
         [$ow, $ol, $oh, $nx, $ny, $nz] = [$candidate[self::C_OW], $candidate[self::C_OL], $candidate[self::C_OH], $candidate[self::C_NX], $candidate[self::C_NY], $candidate[self::C_NZ]];
@@ -1645,21 +1650,29 @@ class BlockPacker implements LoggerAwareInterface
      * @param array<int, int|float> $placement
      * @param array<int, int>       $next      per-type index of the next item object to hand out
      */
-    private function appendItems(PackedItemList $list, array $placement, array &$next): void
+    private function appendItems(PackedItemList $list, array $placement, array &$next, int $shiftX = 0, int $shiftY = 0): void
     {
-        foreach ($this->itemsOf($placement) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
+        foreach ($this->itemsOf($placement, $shiftX, $shiftY) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
             $index = $next[$type] ?? 0;
             $list->insert(new PackedItem($this->itemsByType[$type][$index], $x, $y, $z, $w, $l, $h, $angle));
             $next[$type] = $index + 1;
         }
     }
 
+    /**
+     * The packed box of a finished search. With an allowed overhang, the packing is first moved to balance its overhang
+     * (see {@see OverhangBounds::centringShift()}), unless an item's placement callback refuses its new position.
+     */
     private function materialise(BlockSearchState $state): PackedBox
     {
         $list = new PackedItemList();
         $next = [];
         foreach ($state->placements as $placement) {
             $this->appendItems($list, $placement, $next);
+        }
+
+        if ($this->overhang !== null) {
+            $list = $this->centred($state, $list);
         }
 
         $weightLeft = $state->weightLeft;
@@ -1669,7 +1682,7 @@ class BlockPacker implements LoggerAwareInterface
                 continue;
             }
             [$w, $l, $h] = $orientation;
-            // in the corner, or where the item is within its caps if it only fits the box with its overhang
+            // in the corner, or (if it only fits the box with its overhang) hanging over equally, on its own
             $x = $this->overhang?->startX($w) ?? 0;
             $y = $this->overhang?->startY($l) ?? 0;
             if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), $x, $y, 0, $w, $l, $h)) {
@@ -1680,6 +1693,66 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return new PackedBox($this->box, $list);
+    }
+
+    /**
+     * The items of a finished search (as placed, in $list) moved to balance their overhang, or as placed if they need no
+     * move or a placement callback refuses an item's new position.
+     */
+    private function centred(BlockSearchState $state, PackedItemList $list): PackedItemList
+    {
+        assert($this->overhang !== null);
+        [$shiftX, $shiftY] = $this->overhang->centringShift($list);
+        if ($shiftX === 0 && $shiftY === 0) {
+            return $list;
+        }
+        if (!$this->callbacksAcceptShift($state, $shiftX, $shiftY)) {
+            $this->logger->debug('Overhang not balanced: a placement callback refused an item\'s balanced position', ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
+
+            return $list;
+        }
+        $this->logger->debug('Overhang balanced', ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
+
+        $shifted = new PackedItemList();
+        $next = [];
+        foreach ($state->placements as $placement) {
+            $this->appendItems($shifted, $placement, $next, $shiftX, $shiftY);
+        }
+
+        return $shifted;
+    }
+
+    /**
+     * Whether every item with a placement callback accepts its position in the packing moved by this shift. They are
+     * asked as during the search: in the order the items are placed, each with only the items placed before it in the
+     * box (at their moved positions). This is outside the search, so is not counted against its budget.
+     */
+    private function callbacksAcceptShift(BlockSearchState $state, int $shiftX, int $shiftY): bool
+    {
+        $constrained = false;
+        foreach ($state->placements as $placement) {
+            $constrained = $constrained || $this->constrained[$placement[self::C_TYPE]];
+        }
+        if (!$constrained) {
+            return true;
+        }
+
+        $context = new PackedItemList();
+        $next = [];
+        foreach ($state->placements as $placement) {
+            foreach ($this->itemsOf($placement, $shiftX, $shiftY) as [$type, $x, $y, $z, $w, $l, $h, $angle]) {
+                $index = $next[$type] ?? 0;
+                $next[$type] = $index + 1;
+                $item = $this->itemsByType[$type][$index];
+                // a PackedBox for each call, as a PackedBox keeps what it has worked out about its items
+                if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $context), $x, $y, $z, $w, $l, $h)) {
+                    return false;
+                }
+                $context->insert(new PackedItem($item, $x, $y, $z, $w, $l, $h, $angle));
+            }
+        }
+
+        return true;
     }
 
     /**

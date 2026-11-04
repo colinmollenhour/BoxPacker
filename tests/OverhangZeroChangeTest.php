@@ -19,11 +19,14 @@ use function array_keys;
 use function array_map;
 use function array_slice;
 use function implode;
+use function json_encode;
+
+use const JSON_THROW_ON_ERROR;
 
 /**
  * A box that opts in to an allowed overhang with every allowance zero packs exactly as the same box without it: the
- * same items in the same places, found with the same search effort. Checked on a sample of the published instances
- * (the full datasets are compared separately).
+ * same items in the same places, found with the same search effort, with the same JSON, visualiser URLs and used and
+ * remaining space. Checked on a sample of the published instances (the full datasets are compared separately).
  */
 #[CoversNothing]
 class OverhangZeroChangeTest extends TestCase
@@ -81,7 +84,8 @@ class OverhangZeroChangeTest extends TestCase
     }
 
     /**
-     * Every packed item's box, position, dimensions and angle in packing order, and for a single box the search effort.
+     * Every packed item's box, position, dimensions and angle in packing order, each box's output and space used, the
+     * whole packing's output, and for a single box the search effort.
      *
      * @param array{kind: string, box?: Box, boxes?: list<Box>, items: ItemList} $instance
      */
@@ -93,8 +97,10 @@ class OverhangZeroChangeTest extends TestCase
             $packer->setStrategy($strategy);
             $packer->setSearchBudget(self::SEARCH_BUDGET);
             $packedBox = $packer->pack();
+            $packedBoxes = new PackedBoxList();
+            $packedBoxes->insert($packedBox);
 
-            return self::fingerprint([$packedBox]) . "\nsearch placements: {$packer->getSearchPlacements()}";
+            return self::fingerprint($packedBoxes) . "\nsearch placements: {$packer->getSearchPlacements()}";
         }
 
         $packer = new Packer();
@@ -109,10 +115,7 @@ class OverhangZeroChangeTest extends TestCase
         return self::fingerprint($packer->pack()) . "\nunpacked: {$packer->getUnpackedItems()->count()}";
     }
 
-    /**
-     * @param iterable<PackedBox> $packedBoxes
-     */
-    private static function fingerprint(iterable $packedBoxes): string
+    private static function fingerprint(PackedBoxList $packedBoxes): string
     {
         $rows = [];
         foreach ($packedBoxes as $packedBox) {
@@ -120,7 +123,16 @@ class OverhangZeroChangeTest extends TestCase
             foreach ($packedBox->items as $p) {
                 $rows[] = implode(',', array_map('strval', [$p->item->getDescription(), $p->x, $p->y, $p->z, $p->width, $p->length, $p->depth, $p->angle]));
             }
+            $rows[] = 'space ' . implode(',', array_map('strval', [
+                $packedBox->getUsedWidth(), $packedBox->getUsedLength(), $packedBox->getUsedDepth(),
+                $packedBox->getRemainingWidth(), $packedBox->getRemainingLength(), $packedBox->getRemainingDepth(),
+                $packedBox->getUsedVolume(), $packedBox->getUnusedVolume(), $packedBox->getVolumeUtilisation(), $packedBox->getWeight(),
+            ]));
+            $rows[] = 'json ' . json_encode($packedBox, JSON_THROW_ON_ERROR);
+            $rows[] = 'url ' . $packedBox->generateVisualisationURL();
         }
+        $rows[] = 'json ' . json_encode($packedBoxes, JSON_THROW_ON_ERROR);
+        $rows[] = 'url ' . $packedBoxes->generateVisualisationURL();
 
         return implode("\n", $rows);
     }

@@ -92,8 +92,10 @@ class SupportCalculator
             return AngledGeometry::intersectionArea($item->getFootprint(), [[0.0, 0.0], [(float) $overhang->width, 0.0], [(float) $overhang->width, (float) $overhang->length], [0.0, (float) $overhang->length]]);
         }
 
-        $ix = min($item->x + $item->width, $overhang->width + $overhang->capRight($item->width)) - max($item->x, -$overhang->capLeft($item->width));
-        $iy = min($item->y + $item->length, $overhang->length + $overhang->capBack($item->length)) - max($item->y, -$overhang->capFront($item->length));
+        $sideCap = $overhang->sideCap($item->width);
+        $endCap = $overhang->endCap($item->length);
+        $ix = min($item->x + $item->width, $overhang->width + $sideCap) - max($item->x, -$sideCap);
+        $iy = min($item->y + $item->length, $overhang->length + $endCap) - max($item->y, -$endCap);
 
         return $ix > 0 && $iy > 0 ? (float) ($ix * $iy) : 0.0;
     }

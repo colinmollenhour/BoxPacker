@@ -25,6 +25,8 @@ use function array_fill;
 use function implode;
 use function json_decode;
 use function json_encode;
+use function max;
+use function min;
 use function rawurldecode;
 use function strlen;
 use function strpos;
@@ -48,7 +50,7 @@ class OverhangPackerTest extends TestCase
 
     private static function overhangPallet(string $reference = '48x40 with overhang'): OverhangTestBox
     {
-        return new OverhangTestBox($reference, 4800, 4000, 6500, 0, 4800, 4000, 6500, self::NO_WEIGHT_LIMIT, new AllowedOverhang(150, 150, 300, 300));
+        return new OverhangTestBox($reference, 4800, 4000, 6500, 0, 4800, 4000, 6500, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 150, frontAndBack: 300));
     }
 
     /**
@@ -70,13 +72,15 @@ class OverhangPackerTest extends TestCase
     }
 
     /**
-     * @return list<string> box reference and item count of each box, all checked by the validator
+     * @param  iterable<PackedBox> $packedBoxes
+     * @return list<string>        box reference and item count of each box, all checked by the validator (as balanced too)
      */
-    private static function summary(PackedBoxList $packedBoxes): array
+    private static function summary(iterable $packedBoxes): array
     {
         $summary = [];
         foreach ($packedBoxes as $packedBox) {
             self::assertSame([], PackingValidator::problems($packedBox));
+            self::assertSame([], PackingValidator::centringProblems($packedBox));
             self::assertGreaterThanOrEqual(1.0, PackingValidator::minimumSupport($packedBox));
             $summary[] = "{$packedBox->box->getReference()}: {$packedBox->items->count()}";
         }
@@ -112,6 +116,64 @@ class OverhangPackerTest extends TestCase
     }
 
     #[DataProvider('strategies')]
+    public function testEveryPalletIsBalanced(PackingStrategy $strategy): void
+    {
+        // with Thorough, identical packings of the same items come from its cache, as packed (and so as balanced) the
+        // first time: every pallet's 16 hang 0.77" and 0.76" over the sides and 2.52" over the front and the back
+        $packer = self::pack([self::overhangPallet(), new TestBox('51x46', 5100, 4600, 6500, 0, 5100, 4600, 6500, self::NO_WEIGHT_LIMIT)], 48, $strategy);
+        $packedBoxes = $packer->pack();
+
+        self::assertSame(['48x40 with overhang: 16', '48x40 with overhang: 16', '48x40 with overhang: 16'], self::summary($packedBoxes));
+        $layouts = [];
+        foreach ($packedBoxes as $packedBox) {
+            $xs = $ys = [];
+            foreach ($packedBox->items as $item) {
+                $xs[] = $item->x;
+                $xs[] = $item->x + $item->width;
+                $ys[] = $item->y;
+                $ys[] = $item->y + $item->length;
+            }
+            self::assertSame([-77, 4876, -252, 4252], [min($xs), max($xs), min($ys), max($ys)]);
+            $layouts[] = self::fingerprint([$packedBox]);
+        }
+        self::assertSame([$layouts[0], $layouts[0], $layouts[0]], $layouts);
+    }
+
+    public function testACachedPackingIsAsBalancedAsWhenItWasPacked(): void
+    {
+        $pallet = self::overhangPallet();
+        $boxes = new BoxList();
+        $boxes->insert($pallet);
+        $quantities = new WeakMap();
+        $quantities[$pallet] = 10;
+        $factory = new class(PackingStrategy::Thorough, minimumSupport: 1.0) extends VolumePackerFactory {
+            public int $created = 0;
+
+            public function create(Box $box, ItemList $items): VolumePacker
+            {
+                ++$this->created;
+
+                return parent::create($box, $items);
+            }
+        };
+        $thoroughPacker = new ThoroughPacker($boxes, $quantities, $factory, new DefaultPackedBoxCostCalculator(), false);
+        $item = new TestItem('ACME Trampolines', 4953, 2252, 756, 1000, Rotation::BestFit);
+        $items = new ItemList();
+        $items->insert($item, 16);
+        $thoroughPacker->pack($items);
+        $packItems = new ReflectionMethod(ThoroughPacker::class, 'packItems');
+
+        $first = $packItems->invoke($thoroughPacker, $pallet, array_fill(0, 16, $item));
+        $created = $factory->created;
+        $cached = $packItems->invoke($thoroughPacker, $pallet, array_fill(0, 16, $item));
+
+        self::assertSame($created, $factory->created, 'the second packing came from the cache');
+        self::assertNotSame($first, $cached);
+        self::assertSame(self::fingerprint([$first]), self::fingerprint([$cached]));
+        self::assertSame(['48x40 with overhang: 16'], self::summary([$cached]));
+    }
+
+    #[DataProvider('strategies')]
     public function testWeightIsBalancedAcrossPalletsLoadedPastTheirOwnVolume(PackingStrategy $strategy): void
     {
         // 15 per pallet is more than a pallet's own volume, so balancing only works if its repacks allow for the overhang
@@ -131,7 +193,7 @@ class OverhangPackerTest extends TestCase
         $packer->setStrategy(PackingStrategy::Thorough);
         $packer->setMinimumSupport(1.0);
         $packer->throwOnUnpackableItem(false);
-        $packer->addBox(new OverhangTestBox('Deck', 1000, 1000, 2100, 0, 1000, 1000, 2100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(50, 50, 50, 50)));
+        $packer->addBox(new OverhangTestBox('Deck', 1000, 1000, 2100, 0, 1000, 1000, 2100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 50, frontAndBack: 50)));
         $packer->addBox(new TestBox('Big', 1100, 1100, 2100, 0, 1100, 1100, 2100, self::NO_WEIGHT_LIMIT));
         $packer->addItem(new TestItem('Tile', 520, 520, 10, 1, Rotation::Never), 800);
 
@@ -141,7 +203,7 @@ class OverhangPackerTest extends TestCase
     public function testThePackableVolumeBoundAllowsForTheOverhang(): void
     {
         // boards that only fit with the overhang count towards what the pallet could hold, up to its envelope's volume
-        $deck = new OverhangTestBox('Deck', 1000, 1000, 1000, 0, 1000, 1000, 1000, self::NO_WEIGHT_LIMIT, new AllowedOverhang(50, 50, 0, 0));
+        $deck = new OverhangTestBox('Deck', 1000, 1000, 1000, 0, 1000, 1000, 1000, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 50));
         $boxes = new BoxList();
         $boxes->insert($deck);
         $quantities = new WeakMap();
@@ -171,7 +233,7 @@ class OverhangPackerTest extends TestCase
         $items->insert(new TestItem('Carton', 1210, 820, 640, 500, Rotation::KeepFlat), 10);
         $items->insert(new TestItem('Board', 4900, 1000, 100, 500, Rotation::KeepFlat), 2); // only fits with the overhang
         $plain = new TestBox('Pallet', 4800, 4000, 6500, 0, 4800, 4000, 6500, self::NO_WEIGHT_LIMIT);
-        $overhang = new OverhangTestBox('Pallet', 4800, 4000, 6500, 0, 4800, 4000, 6500, self::NO_WEIGHT_LIMIT, new AllowedOverhang(150, 150, 300, 300));
+        $overhang = new OverhangTestBox('Pallet', 4800, 4000, 6500, 0, 4800, 4000, 6500, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 150, frontAndBack: 300));
 
         $run = static function (Box $box, PackingStrategy $strategy) use ($items): string {
             $packer = new Packer();
@@ -203,7 +265,7 @@ class OverhangPackerTest extends TestCase
 
     public function testUsedAndRemainingSpaceWithItemsHangingOver(): void
     {
-        $box = new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(100, 100, 100, 100));
+        $box = new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 100, frontAndBack: 100));
         $item = new TestItem('Item', 1080, 520, 100, 1, Rotation::Never);
         $items = new PackedItemList();
         $items->insert(new PackedItem($item, -40, -20, 0, 1080, 520, 100));
@@ -231,13 +293,14 @@ class OverhangPackerTest extends TestCase
         $item = new TestItem('Item', 1080, 520, 100, 1, Rotation::Never);
         $items = new PackedItemList();
         $items->insert(new PackedItem($item, -40, -20, 0, 1080, 520, 100));
-        $packedBox = new PackedBox(new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(40, 60, 20, 0)), $items);
+        $packedBox = new PackedBox(new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, self::NO_WEIGHT_LIMIT, new AllowedOverhang(sides: 40, frontAndBack: 20)), $items);
         $list = new PackedBoxList();
         $list->insert($packedBox);
 
-        self::assertSame(['left' => 40, 'right' => 60, 'front' => 20, 'back' => 0], json_decode(json_encode($packedBox, JSON_THROW_ON_ERROR), true)['box']['allowedOverhang']);
-        self::assertSame([40, 60, 20, 0], self::visualiserBoxes($packedBox->generateVisualisationURL())[0][5]);
-        self::assertSame([40, 60, 20, 0], self::visualiserBoxes($list->generateVisualisationURL())[0][5]);
+        self::assertSame(['sides' => 40, 'frontAndBack' => 20], json_decode(json_encode($packedBox, JSON_THROW_ON_ERROR), true)['box']['allowedOverhang']);
+        // the visualiser draws each edge: [left, right, front, back]
+        self::assertSame([40, 40, 20, 20], self::visualiserBoxes($packedBox->generateVisualisationURL())[0][5]);
+        self::assertSame([40, 40, 20, 20], self::visualiserBoxes($list->generateVisualisationURL())[0][5]);
     }
 
     public function testOutputIsUnchangedForABoxWithoutAnOverhangOrWithAZeroOne(): void
@@ -270,7 +333,10 @@ class OverhangPackerTest extends TestCase
         return json_decode(rawurldecode(substr($url, strpos($url, $marker) + strlen($marker))), true, flags: JSON_THROW_ON_ERROR)['boxes'];
     }
 
-    private static function fingerprint(PackedBoxList $packedBoxes): string
+    /**
+     * @param iterable<PackedBox> $packedBoxes
+     */
+    private static function fingerprint(iterable $packedBoxes): string
     {
         $rows = [];
         foreach ($packedBoxes as $packedBox) {

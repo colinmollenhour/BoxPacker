@@ -95,7 +95,8 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Used width inside box for packing items: from x = 0 (or the leftmost item, if it hangs over the left side of a
-     * box with an allowed overhang) to the rightmost item.
+     * box with an allowed overhang) to the rightmost item. A load that a box with an allowed overhang has moved off
+     * x = 0 to balance its overhang counts the gap at the left as used.
      */
     public function getUsedWidth(): int
     {
@@ -112,7 +113,7 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Used length inside box for packing items: from y = 0 (or the frontmost item, if it hangs over the front of a box
-     * with an allowed overhang) to the backmost item.
+     * with an allowed overhang) to the backmost item. As with the width, a gap at the front counts as used.
      */
     public function getUsedLength(): int
     {
