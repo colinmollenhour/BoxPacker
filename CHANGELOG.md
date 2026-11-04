@@ -22,13 +22,17 @@
     overhang, counting gaps as negative overhang and choosing the smaller move on a tie. Every item stays within
     its caps, and angled items stay on the deck. This balances overhang, not the centre of gravity, and cannot close
     gaps inside the load. A deck-fitting load found overhanging can end up centred on the deck; Fast's layer packing
-    stays in its original position
-  - When the load moves, placement callbacks are asked again once at the proposed final positions, with only their
-    already-moved predecessors as context. On the first refusal, the whole load keeps the position the search found.
+    stays in its original position, as it does when Thorough keeps it (for up to 40 items, when the search leaves some
+    out and the layer packing is at least as dense)
+  - When the load moves, placement callbacks are asked again at the proposed final positions, in packing order until
+    one refuses, with only their already-moved predecessors as context. On the first refusal, the whole load keeps the
+    position the search found.
     Exceptions propagate out of `pack()`; these extra calls do not use up the search budget
   - In a packing found by the block search (Thorough, and Fast's greedy block search), items with a zero width, length
     or depth are placed after the load and do not affect its centring: each stays at (0, 0) if it fits the deck, or is
-    centred on its own within its caps if it needs overhang. Fast's layer packing places them as it always has
+    centred on its own within its caps if it needs overhang. A constrained one is asked at that position, possibly
+    first in an empty box to choose its orientation, then with the final items as context, and is skipped if it
+    refuses. Fast's layer packing places them as it always has
   - `getUsedWidth()` and `getUsedLength()` include the overhang and any gap before a centred load, so
     `getRemainingWidth()` and `getRemainingLength()` can be negative; for a load centred onto the deck they measure
     only the far gap. As items can take up more than the inner volume, `getUnusedVolume()` can be negative too and

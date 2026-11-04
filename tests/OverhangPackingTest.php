@@ -18,6 +18,7 @@ use DVDoug\BoxPacker\Test\TestBox;
 use DVDoug\BoxPacker\Test\TestItem;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\ExpectationFailedException;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
@@ -34,6 +35,7 @@ use function iterator_to_array;
 use function max;
 use function min;
 use function sort;
+use function str_starts_with;
 
 /**
  * Packing boxes with an allowed overhang (Thorough and Fast), checked with the independent validator throughout, as
@@ -114,9 +116,14 @@ class OverhangPackingTest extends TestCase
 
     /**
      * Pack, and work out where the block search placed the items before they were moved to balance the overhang: where
-     * they are, less the move it logged (none if it logged none). Only for a packing found by the block search (the
-     * layer packer's packings are never moved). Recording placement callbacks would show where the search placed the
-     * items without relying on the log, but would make each item its own type, and so change the packing.
+     * they are, less the move it logged (none if it logged none). Items with no volume are left out: the search places
+     * them after the move. Recording placement callbacks would show where the search placed the items without relying
+     * on the log, but would make each item its own type, and so change the packing.
+     *
+     * The move logged is the block search's, so this only holds if the packing returned is the block search's, not the
+     * layer packer's (which packs the deck alone, is never moved, and is kept where it packs as much). So when a move
+     * is logged, the packing returned must use the volume the search logged, and (if the layer packer ran after the
+     * search) must differ from the layer packer's: being one of the two, it is then the search's.
      *
      * @param  callable(Box, ItemList, float, bool, LoggerInterface): PackedBox $pack
      * @return array{0: PackedBox, 1: list<PackedItem>}
@@ -130,24 +137,57 @@ class OverhangPackingTest extends TestCase
             public array $moves = [];
 
             /**
+             * The volume packed by the last block search to finish, and by the one that logged the move.
+             */
+            public ?int $searchVolume = null;
+
+            public ?int $movedVolume = null;
+
+            public bool $layerPackerRanAfterTheMove = false;
+
+            /**
              * @param mixed[] $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {
-                if ($message === 'Overhang balanced') {
+                if ($message === 'Block search complete') {
+                    $this->searchVolume = $context['volume'];
+                } elseif ($message === 'Overhang balanced') {
                     $this->moves[] = [$context['shiftX'], $context['shiftY']];
+                    $this->movedVolume = $this->searchVolume;
+                } elseif ($this->moves !== [] && str_starts_with((string) $message, '[EVALUATING BOX]')) {
+                    $this->layerPackerRanAfterTheMove = true;
                 }
             }
         };
         $packedBox = $pack($box, $items, $support, $angled, $logger);
         self::assertLessThanOrEqual(1, count($logger->moves));
+        if ($logger->moves !== []) {
+            self::assertSame($logger->movedVolume, $packedBox->getUsedVolume(), 'the packing returned is not the one the block search moved');
+            if ($logger->layerPackerRanAfterTheMove) {
+                self::assertNotSame(self::placements(self::layerPacking($box, $items, $support)), self::placements($packedBox), 'the packing returned is the layer packer\'s, not the one the block search moved');
+            }
+        }
         [$moveX, $moveY] = $logger->moves[0] ?? [0, 0];
         $before = [];
         foreach ($packedBox->items as $item) {
-            $before[] = new PackedItem($item->item, $item->x - $moveX, $item->y - $moveY, $item->z, $item->width, $item->length, $item->depth, $item->angle);
+            if ($item->width * $item->length * $item->depth > 0) {
+                $before[] = new PackedItem($item->item, $item->x - $moveX, $item->y - $moveY, $item->z, $item->width, $item->length, $item->depth, $item->angle);
+            }
         }
 
         return [$packedBox, $before];
+    }
+
+    /**
+     * What the layer packer packs in this box: as in a box of the same size with no allowed overhang (it packs the deck
+     * alone), where Fast uses the layer packer alone.
+     */
+    private static function layerPacking(Box $box, ItemList $items, float $support): PackedBox
+    {
+        $deck = new TestBox($box->getReference(), $box->getOuterWidth(), $box->getOuterLength(), $box->getOuterDepth(), $box->getEmptyWeight(), $box->getInnerWidth(), $box->getInnerLength(), $box->getInnerDepth(), $box->getMaxWeight());
+
+        return self::fast($deck, $items, $support);
     }
 
     /**
@@ -270,6 +310,9 @@ class OverhangPackingTest extends TestCase
         [$packedBox, $before] = self::packNotingTheMove(self::thorough(...), self::pallet(new AllowedOverhang(sides: 250, frontAndBack: 250)), self::trampolines(24));
 
         self::assertValid($packedBox);
+        // the search builds it from the corner of its frame, 2.5" over the left and the front, and moves it by 1.73"
+        // along x alone
+        self::assertSame([-250, 4703, -250, 4113], self::extents($before));
         self::assertSame([], PackingValidator::shiftProblems($before, $packedBox));
         // 8 flat, hanging the whole 2.5" over the front, and behind them 2 rows of 2 on their long edges, the back row
         // hanging 1.13" (its cap, 15 % of 7.56") over the back. Along x the load is balanced as the 16 are (0.77" and
@@ -303,6 +346,21 @@ class OverhangPackingTest extends TestCase
         self::assertValid($packedBox);
         self::assertSame(self::placements(self::fast(self::pallet(null), self::trampolines(24))), self::placements($packedBox));
         self::assertSame([0, 4536, 0, 3764], self::extents($packedBox));
+    }
+
+    public function testOnlyTheBlockSearchsOwnPackingIsTakenBackByItsMove(): void
+    {
+        // here the greedy block search moves its 10 and logs the move, with the same volume as the layer packer's 10,
+        // which are kept: taking that move off them would not show where anything was placed, so packNotingTheMove()
+        // refuses
+        try {
+            self::packNotingTheMove(self::fast(...), self::pallet(new AllowedOverhang(sides: 250, frontAndBack: 250)), self::trampolines(24));
+        } catch (ExpectationFailedException $e) {
+            self::assertStringContainsString('the packing returned is the layer packer\'s', $e->getMessage());
+
+            return;
+        }
+        self::fail('packNotingTheMove() took the block search\'s move off the layer packer\'s packing');
     }
 
     public function testAnItemThatOnlyFitsWithOverhangIsPacked(): void
@@ -712,12 +770,30 @@ class OverhangPackingTest extends TestCase
             [$packedBox, $before] = self::packNotingTheMove($pack, $box, $items);
             self::assertCount(4, $packedBox->items);
             self::assertValid($packedBox);
+            self::assertSame([-100, 900, 0, 1000], self::extents($before));
             self::assertSame([], PackingValidator::shiftProblems($before, $packedBox));
             $positions = [];
             foreach ($packedBox->items as $packedItem) {
                 $positions[$packedItem->item->getDescription()] = [$packedItem->x, $packedItem->y, $packedItem->z];
             }
             self::assertSame(['Box' => [0, 0, 0], 'Deck sheet' => [0, 0, 0], 'Point' => [0, 0, 0], 'Sheet' => [-50, 0, 0]], $positions);
+        }
+    }
+
+    public function testItemsWithNoVolumeTakeNoSpace(): void
+    {
+        // an item with a zero width (or length) but a depth, at the corner of the deck, stands inside the footprint of
+        // a solid moved to hang 50 over each side (or the front and the back): it takes no space, so does not collide
+        foreach ([[[1100, 500, 100], [0, 500, 100], new AllowedOverhang(sides: 100), [-50, 0]], [[500, 1100, 100], [500, 0, 100], new AllowedOverhang(frontAndBack: 100), [0, -50]]] as [$solid, $flat, $allowance, $solidAt]) {
+            $items = new ItemList();
+            $items->insert(new TestItem('Solid', ...[...$solid, 1, Rotation::Never]));
+            $items->insert(new TestItem('Flat', ...[...$flat, 1, Rotation::Never]));
+
+            foreach ([self::thorough(...), self::fast(...)] as $pack) {
+                $packedBox = $pack(self::pallet($allowance, 1000, 1000, 100), $items);
+                self::assertValid($packedBox);
+                self::assertSame(["Flat 0,0,0 {$flat[0]}x{$flat[1]}x100", "Solid {$solidAt[0]},{$solidAt[1]},0 {$solid[0]}x{$solid[1]}x100"], self::placements($packedBox));
+            }
         }
     }
 

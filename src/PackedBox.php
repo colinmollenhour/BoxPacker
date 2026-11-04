@@ -256,7 +256,8 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Geometric and weight invariants of a finished box: in-bounds (within the caps
-     * of any allowed overhang), no overlaps, legal item orientation, under max weight.
+     * of any allowed overhang), no overlaps (among items with a volume), legal item
+     * orientation, under max weight.
      *
      * Placement callbacks and linked-group membership need the live unpacked list
      * and are enforced at pack time, not here.
@@ -284,7 +285,14 @@ readonly class PackedBox implements JsonSerializable
             }
             assert($this->packedDimensionsMatchItem($itemToCheck));
 
+            // an item with no volume (a zero width, length or depth) takes no space, so cannot collide with another
+            if ($itemToCheck->width * $itemToCheck->length * $itemToCheck->depth === 0) {
+                continue;
+            }
             foreach ($itemsToCheck as $otherItem) {
+                if ($otherItem->width * $otherItem->length * $otherItem->depth === 0) {
+                    continue;
+                }
                 $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->boundingWidth) && $otherItem->x < ($itemToCheck->x + $itemToCheck->boundingWidth);
                 $hasYOverlap = $itemToCheck->y < ($otherItem->y + $otherItem->boundingLength) && $otherItem->y < ($itemToCheck->y + $itemToCheck->boundingLength);
                 $hasZOverlap = $itemToCheck->z < ($otherItem->z + $otherItem->depth) && $otherItem->z < ($itemToCheck->z + $itemToCheck->depth);

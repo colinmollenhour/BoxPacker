@@ -79,7 +79,8 @@ can really carry. Allowances so large that the envelope's width, length or volum
 make packing throw ``InvalidArgumentException``.
 
 For example, an ACME Trampolines carton measures 49.53 × 22.52 × 7.56 in. On a 48 × 40 in pallet with a
-65 in maximum load height, these are the measured results with minimum support 1.0 and angled placement off:
+65 in maximum load height, these are the measured results for 24 cartons offered, free to rotate, with minimum
+support 1.0, angled placement off, and ``Thorough`` at the library's default effort:
 
 .. list-table:: Cartons packed by allowance at each edge
     :header-rows: 1
@@ -145,7 +146,9 @@ Moving all items together preserves their support and collision relations. This 
 centre of gravity, and cannot close gaps inside the load.
 
 An axis on which nothing hangs over is not moved. Boxes that do not opt in, all-zero boxes and Fast's layer
-packing, which never overhangs, are unchanged.
+packing, which never overhangs, are unchanged. The same deck-only layer packing can also be ``Thorough``'s result:
+for up to 40 items, when the search leaves some out and the layer packing is at least as dense (see
+`Strategies and angled placement`_). It is then not centred either.
 
 The thorough search starts in a corner of the widened area, so even a load that fits the deck is usually found
 hanging over the front-left edges. Centring then moves it onto the deck with equal gaps. For example, a 12 in cube
@@ -154,21 +157,22 @@ in the corner. For the centred cube, ``getUsedWidth()`` is 30 in, including the 
 ``getRemainingWidth()`` is only the 18 in far gap.
 
 When the load moves, each ``ConstrainedPlacementItem`` is asked again once, in packing order, at its proposed final
-position, with only its already-moved predecessors as context. On the first refusal, the check stops and the whole
-load keeps the valid position the search found, which may leave its overhang unbalanced. This check makes no extra
+position, with only its already-moved predecessors as context. On the first refusal, the check stops (later items are
+not asked) and the whole load keeps the valid position the search found, which may leave its overhang unbalanced. This check makes no extra
 calls when the load does not move. A callback that counts calls sees these extra calls; an exception thrown during this
 check propagates out of ``pack()``. These calls do not use up the search budget.
 
 In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
 length or depth are placed after the load and do not affect its centring. Each is placed on its own: one that fits
 the deck stays at (0, 0); one that needs overhang is centred within its own caps. A constrained flat item is asked
-once at that position with the final items already packed as context, and is skipped if it refuses. Fast's layer
-packing places such items as it always has.
+at that position, possibly first in an empty box to choose its orientation, then with the final items already packed
+as context, and is skipped if it refuses. Fast's layer packing places such items as it always has.
 
 The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole load. ``Thorough`` packs 8 lying flat
 at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at
 0.77 / 0.76 in, but the load cannot move front to back. The flat stack is at its own 2.50 in front limit, and the
-back row is at its own 1.13 in back limit (15% of its 7.56 in depth, rounded down). The load stays 2.50 in over the
+back row is at its own 1.13 in back limit (15% of its 7.56 in packed length, rounded down, as it stands on a long
+edge). The load stays 2.50 in over the
 front and 1.13 in over the back, with a 5.99 in gap inside it. Moving the load as a whole cannot close that gap.
 
 Support

@@ -78,9 +78,14 @@ final class PackingValidator
             if ($a->item instanceof BischoffConstrainedTestItem && !$a->item->canBePacked($packedBox, $a->x, $a->y, $a->z, $a->width, $a->length, $a->depth)) {
                 $problems[] = "item {$i} stood on a disallowed edge";
             }
+            // an item with no volume (a zero width, length or depth) takes no space, so cannot collide with another
+            if ($a->width * $a->length * $a->depth === 0) {
+                continue;
+            }
             for ($j = $i + 1; $j < $count; ++$j) {
                 $b = $items[$j];
-                if ($a->z < $b->z + $b->depth && $b->z < $a->z + $a->depth
+                if ($b->width * $b->length * $b->depth > 0
+                    && $a->z < $b->z + $b->depth && $b->z < $a->z + $a->depth
                     && AngledGeometry::polygonsOverlap(AngledGeometry::footprint($a), AngledGeometry::footprint($b))) {
                     $problems[] = "items {$i} and {$j} overlap";
                 }

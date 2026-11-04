@@ -128,6 +128,16 @@ class PackingValidatorTest extends TestCase
         return $packedBox;
     }
 
+    public function testItemsWithNoVolumeTakeNoSpace(): void
+    {
+        // an item with a zero width or length (and a depth) inside the footprint of another does not collide with it,
+        // though it is still kept within its own limits; two items with a volume still do
+        self::assertSame([], PackingValidator::problems(self::packing(new AllowedOverhang(sides: 100), [[-50, 0, 1100, 500], [0, 0, 0, 500]])));
+        self::assertSame([], PackingValidator::problems(self::packing(new AllowedOverhang(frontAndBack: 100), [[0, -50, 500, 1100], [0, 0, 500, 0]])));
+        self::assertSame(['item 1 hangs 1 over the right edge, more than 15 % of its extent of 0'], PackingValidator::problems(self::packing(new AllowedOverhang(sides: 100), [[-50, 0, 1100, 500], [1001, 0, 0, 500]])));
+        self::assertSame(['items 0 and 1 overlap'], PackingValidator::problems(self::packing(new AllowedOverhang(sides: 100), [[-50, 0, 1100, 500], [0, 0, 1, 500]])));
+    }
+
     public function testCentring(): void
     {
         $allowance = new AllowedOverhang(sides: 200, frontAndBack: 200);
