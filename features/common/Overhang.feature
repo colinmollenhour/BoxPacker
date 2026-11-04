@@ -38,3 +38,10 @@ Feature: Overhang
     And I do a volume-only packing
     Then the packed box should have 1 items of type "Board"
     And the packed box's items should reach from -25mm to 1025mm across its width and from 0mm to 500mm along its length
+
+  Scenario: The thorough search moves a load that it found hanging over onto the deck with equal gaps
+    Given the box "Pallet", which has external dimensions 1000mm w × 1000mm l × 500mm d × 0g and internal dimensions 1000mm w × 1000mm l × 500mm d and has a max weight of 10000g and an allowed overhang of 100mm at the sides and 100mm at the front and back
+    When I add 1 x keep flat "Board" with dimensions 600mm w × 600mm l × 100mm d × 100g
+    And I do a thorough volume-only packing
+    Then the packed box should have 1 items of type "Board"
+    And the packed box's items should reach from 200mm to 800mm across its width and from 200mm to 800mm along its length

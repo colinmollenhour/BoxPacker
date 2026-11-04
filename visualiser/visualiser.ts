@@ -102,7 +102,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 number,
                 number,
                 [number, number, number, number, number, number, number, number?][],
-                [number, number, number, number]?,
+                unknown?,
             ],
         ) => {
             const packedItems: PackedItem[] = [];
@@ -141,7 +141,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     packedBox[2],
                     packedBox[3],
                     packedItems,
-                    packedBox[5],
+                    parseAllowedOverhang(packedBox[5]),
                 ),
             );
         },
@@ -578,25 +578,30 @@ document.addEventListener("DOMContentLoaded", function () {
                 ];
                 // Dashed and amber, to tell it from the white deck outline. The
                 // dashes are made by hand so they are as long on every edge.
-                const dash = Math.max(x2 - x1, z2 - z1, height) / 60;
-                const lines: Vector3[][] = [];
-                for (const [from, to] of edges) {
-                    const edgeLength = Vector3.Distance(from, to);
-                    for (let start = 0; start < edgeLength; start += 2 * dash) {
-                        const end = Math.min(start + dash, edgeLength);
-                        lines.push([
-                            Vector3.Lerp(from, to, start / edgeLength),
-                            Vector3.Lerp(from, to, end / edgeLength),
-                        ]);
+                // Measured on the longest edge, so that the number of dashes
+                // stays small whatever the URL says.
+                const dash =
+                    Math.max(...edges.map(([from, to]) => Vector3.Distance(from, to))) / 60;
+                if (dash > 0 && Number.isFinite(dash)) {
+                    const lines: Vector3[][] = [];
+                    for (const [from, to] of edges) {
+                        const edgeLength = Vector3.Distance(from, to);
+                        for (let start = 0; start < edgeLength; start += 2 * dash) {
+                            const end = Math.min(start + dash, edgeLength);
+                            lines.push([
+                                Vector3.Lerp(from, to, start / edgeLength),
+                                Vector3.Lerp(from, to, end / edgeLength),
+                            ]);
+                        }
                     }
+                    const outline = CreateLineSystem(
+                        `Envelope #${index}`,
+                        {lines},
+                        scene,
+                    );
+                    outline.isPickable = false;
+                    outline.color = new Color3(1, 0.75, 0.35);
                 }
-                const outline = CreateLineSystem(
-                    `Envelope #${index}`,
-                    {lines},
-                    scene,
-                );
-                outline.isPickable = false;
-                outline.color = new Color3(1, 0.75, 0.35);
             }
 
             packedBox.packedItems.forEach((packedItem: PackedItem, itemIndex) => {
@@ -699,12 +704,32 @@ class Item {
     ) {}
 }
 
+// The optional sixth element of a box in the URL: the allowed overhang at the
+// left, right, front and back edges. Anything other than four finite,
+// non-negative numbers is ignored (no overhang).
+function parseAllowedOverhang(
+    value: unknown,
+): readonly [number, number, number, number] {
+    if (
+        Array.isArray(value) &&
+        value.length === 4 &&
+        value.every(
+            (edge) =>
+                typeof edge === "number" && Number.isFinite(edge) && edge >= 0,
+        )
+    ) {
+        return [value[0], value[1], value[2], value[3]];
+    }
+    return [0, 0, 0, 0];
+}
+
 class PackedBox {
     // How far the packed items could hang over each edge (left, right, front,
     // back): the allowance, but no more than the largest cap among them (15% of
     // the item's width or length, rounded down). Angled items stay on the deck.
     // The envelope is drawn and spaced using this, so a huge allowance does not
-    // shrink the load to a speck.
+    // shrink the load to a speck. No legal packing hangs over by as much as the
+    // box's own width or length, so that is the limit for a hand-made URL.
     public readonly usableOverhang: readonly [number, number, number, number];
 
     constructor(
@@ -731,12 +756,16 @@ class PackedBox {
                 );
             }
         }
+        const usable = (allowance: number, cap: number, limit: number) => {
+            const overhang = Math.min(allowance, cap, limit);
+            return Number.isFinite(overhang) && overhang > 0 ? overhang : 0;
+        };
         const [left, right, front, back] = allowedOverhang;
         this.usableOverhang = [
-            Math.min(left, capWidth),
-            Math.min(right, capWidth),
-            Math.min(front, capLength),
-            Math.min(back, capLength),
+            usable(left, capWidth, width),
+            usable(right, capWidth, width),
+            usable(front, capLength, length),
+            usable(back, capLength, length),
         ];
     }
 

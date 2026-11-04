@@ -12,7 +12,9 @@ Opting in
 ---------
 
 Have your box implement ``DVDoug\BoxPacker\OverhangBox``. It extends ``Box`` with one method:
-``getAllowedOverhang(): AllowedOverhang``. Return the same allowances throughout a packing.
+``getAllowedOverhang(): AllowedOverhang``. Return the same allowances throughout a packing, and for as long as you
+use the boxes it packed: their JSON, their visualiser URLs and the checks the library makes when PHP assertions are
+enabled read the allowance from the box, not from the packing.
 
 ``AllowedOverhang`` is a ``final readonly`` value object. Its two integer allowances default to zero and use the
 same length unit as the box:
@@ -21,8 +23,9 @@ same length unit as the box:
 * ``frontAndBack`` applies at each of the front and back edges.
 
 Each value is an allowance at each edge, not a total shared between the two. Negative values throw
-``InvalidArgumentException``. More than two arguments throw ``ArgumentCountError``; the four-edge form has been
-removed. ``isZero()`` returns true when both values are zero; ``AllowedOverhang::ITEM_CAP_PERCENT`` is fixed at 15.
+``InvalidArgumentException``. More than two arguments throw ``ArgumentCountError``, so that a stale four-value call
+fails rather than being read as a different allowance. ``isZero()`` returns true when both values are zero;
+``AllowedOverhang::ITEM_CAP_PERCENT`` is fixed at 15.
 
 For example, this pallet uses hundredths of an inch for all dimensions and grams for weights. Its inner depth is
 the maximum load height:
@@ -72,11 +75,12 @@ ends. Every item stays within it. Depth (height) is unchanged. Small items gain 
 7 length units has a cap of zero after rounding.
 
 Within one box, an allowance larger than any item's cap has no further effect on where items go: the search uses only as
-much of each allowance as the largest cap among the items allows. Box selection and the thorough strategy's capacity
-bounds and sharing of search effort between packings use the full allowances, however. A very large allowance can
-therefore change which boxes are tried and how much search each one gets, so give allowances that match what the pallet
-can really carry. Allowances so large that the envelope's width, length or volume cannot be represented as an ``int``
-make packing throw ``InvalidArgumentException``.
+much of each allowance as the largest cap among the items allows. If no item can use the allowance in any of its
+orientations (every cap rounds down to zero), ``Fast`` packs the box exactly as one without an allowed overhang. Box
+selection and the thorough strategy's capacity bounds and sharing of search effort between packings use the full
+allowances, however. A very large allowance can therefore change which boxes are tried and how much search each one
+gets, so give allowances that match what the pallet can really carry. Allowances so large that the envelope's width,
+length or volume cannot be represented as an ``int`` make packing throw ``InvalidArgumentException``.
 
 For example, an ACME Trampolines carton measures 49.53 × 22.52 × 7.56 in. On a 48 × 40 in pallet with a
 65 in maximum load height, these are the measured results for 24 cartons offered, free to rotate, with minimum
@@ -132,7 +136,10 @@ Coordinates stay relative to the deck. Its left-front corner is x = 0, y = 0:
 * Front is y = 0; back is y = the box's inner length.
 
 An overhanging item can have negative x or y, or end past the inner width or length.
-``ConstrainedPlacementItem::canBePacked()`` receives these same coordinates.
+``ConstrainedPlacementItem::canBePacked()`` receives these same coordinates. A callback may refuse positions that
+hang over, for example to keep a product on the deck. The block search starts each block at the edge of the area its
+items may use, which hangs over. When a block of such an item is refused there, the search also offers the same
+block moved as far onto the deck as its free space allows, so the item can still be packed on the deck.
 
 Code that consumes :doc:`positional information<positional-information>` must handle both sides of the deck.
 
@@ -146,15 +153,28 @@ Moving all items together preserves their support and collision relations. This 
 centre of gravity, and cannot close gaps inside the load.
 
 An axis on which nothing hangs over is not moved. Boxes that do not opt in, all-zero boxes and Fast's layer
-packing, which never overhangs, are unchanged. The same deck-only layer packing can also be ``Thorough``'s result:
-for up to 40 items, when the search leaves some out and the layer packing is at least as dense (see
-`Strategies and angled placement`_). It is then not centred either.
+packing, which never overhangs, are unchanged.
 
-The thorough search starts in a corner of the widened area, so even a load that fits the deck is usually found
-hanging over the front-left edges. Centring then moves it onto the deck with equal gaps. For example, a 12 in cube
-on a 48 × 40 in pallet with 3 in allowances ends at x = 18 in, y = 14 in. Fast's layer packing of the same cube stays
-in the corner. For the centred cube, ``getUsedWidth()`` is 30 in, including the 18 in gap before it, and
-``getRemainingWidth()`` is only the 18 in far gap.
+A ``Thorough`` result can also be a ``Fast`` packing. It may then be Fast's deck-only layer packing, which is not
+moved. This happens in three cases:
+
+* For one box with up to 40 items, when the search leaves some out and the layer packing is at least as dense (see
+  `Strategies and angled placement`_). This also applies to each box that ``Packer`` packs.
+* With ``VolumePacker::packBestSubset()``, for up to 40 items, when the search leaves some out. The packing it is
+  compared with is ``Fast``'s best subset, which can be a layer packing or a centred greedy block search.
+* With ``Packer``, for orders of up to 200 items, when ``Fast``'s boxes for the whole order leave fewer items
+  unpacked, or as many in fewer or cheaper boxes (see :doc:`Choosing the boxes<thorough>`). Each of those boxes is
+  ``Fast``'s packing: its layer packing, not moved, or its greedy block search, centred.
+
+Where a load that fits the deck ends up depends on where it was found. The block search starts each block at the
+edge of the area its items may use, so a load of items that can hang over is usually found hanging over the
+front-left edges. Centring then moves it onto the deck with equal gaps. For example, a 12 in cube on a 48 × 40 in
+pallet with 3 in allowances ends at x = 18 in, y = 14 in. A load found entirely on the deck is not moved, and stays
+where it was found, often in the front-left corner. Fast's layer packing of the same cube stays in the corner, and
+so does a load whose items all have caps that round down to zero. Each axis is treated on its own, so a load found
+hanging over on one axis only is moved on that axis only. The same items can therefore end centred or in the corner,
+depending on the strategy and on which packing was kept. For the centred cube, ``getUsedWidth()`` is 30 in,
+including the 18 in gap before it, and ``getRemainingWidth()`` is only the 18 in far gap.
 
 When the load moves, each ``ConstrainedPlacementItem`` is asked again, in packing order, at its proposed final
 position, with only its already-moved predecessors as context. On the first refusal the check stops (later items are
@@ -163,10 +183,11 @@ This check makes no extra calls when the load does not move. A callback that cou
 an exception thrown during this check propagates out of ``pack()``. These calls do not use up the search budget.
 
 In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
-length or depth are placed after the load and do not affect its centring. Each is placed on its own: one that fits
-the deck stays at (0, 0); one that needs overhang is centred within its own caps. A constrained flat item is asked
-at that position, possibly first in an empty box to choose its orientation, then with the final items already packed
-as context, and is skipped if it refuses. Fast's layer packing places such items as it always has.
+length or depth are placed after the load and do not affect its centring. Each is placed on its own, in an
+orientation that fits the deck if it has one. One that fits the deck stays at (0, 0), so it never hangs over; one
+that needs overhang is centred within its own caps. A constrained flat item is asked at that position, possibly
+first in an empty box to choose its orientation, then with the final items already packed as context, and is
+skipped if it refuses. Fast's layer packing places such items as it always has.
 
 The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole load. ``Thorough`` packs 8 lying flat
 at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at
@@ -181,6 +202,11 @@ Support
 The deck supports items standing on the floor. Overhang within the cap does not count against
 ``setMinimumSupport()``, so ``setMinimumSupport(1.0)`` works with allowed overhang in pallet mode.
 Items above the floor follow the existing item-on-item :doc:`support rules<thorough>`.
+
+``Thorough`` enforces the minimum support. ``Fast`` enforces it only in its greedy block search: its layer packing
+has no support rule, and ``Fast`` keeps that packing when it is at least as dense (see
+`Strategies and angled placement`_). Use ``Thorough`` when every item must meet the minimum. Strict item ordering,
+single-pass mode and ``packAcrossWidthOnly()`` use the layer packing with either strategy.
 
 The cap is a geometric limit on how far an item hangs off the deck. It does not model carton crush strength or
 determine whether a particular product can withstand that overhang.
@@ -207,14 +233,18 @@ The :doc:`thorough strategy<thorough>` searches the envelope while enforcing the
 the items can use. The search is a heuristic: with the larger space it can occasionally find a slightly less dense
 packing than it would without overhang. For up to 40 items, if the search leaves some out, it also compares its
 packing with the ``Fast`` packing on the deck alone and keeps the denser. Time permitting, and provided that packing
-meets the minimum support, this puts a floor under the thorough result.
+meets the minimum support, this puts a floor under the thorough result. ``packBestSubset()`` compares with
+``Fast``'s best subset instead, which can use the overhang, and ``Packer`` can keep ``Fast``'s boxes for the whole
+order (see `Centring`_).
 
-For an opted-in box, ``Fast`` also runs a quick, greedy version of the thorough block search. It keeps whichever of
-that packing and its usual layer packing on the deck uses more volume (then, if equal, packs more items). Fast
-therefore never packs less volume than the layer packer on the deck alone, but it can pack fewer items than without
-overhang. With angled placement enabled, the greedy angled search that Fast runs without overhang is not among the
-packings compared. Strict item ordering (``beStrictAboutItemOrdering()``), single-pass mode and
-``packAcrossWidthOnly()`` use the deck only.
+For an opted-in box, ``Fast`` first packs the deck with its usual layer packer. If that holds every item, it is the
+result. Otherwise ``Fast`` also runs a quick, greedy version of the thorough block search, which uses the overhang,
+and keeps whichever of the two packings uses more volume (then, if equal, packs more items, and then the layer
+packing). Fast therefore never packs less volume than the layer packer on the deck alone, but it can pack fewer
+items than without overhang. If no item can use the allowance, ``Fast`` packs exactly as for a box without one. With
+angled placement enabled, the greedy angled search that Fast runs without overhang is not among the packings
+compared. Strict item ordering (``beStrictAboutItemOrdering()``), single-pass mode and ``packAcrossWidthOnly()`` use
+the layer packer on the deck only, with either strategy.
 
 With :doc:`angled placement<angled-placement>` enabled, angled items stay entirely on the deck. An item that fits
 square with overhang is never angled. Square items in the same box may still overhang.
@@ -231,11 +261,16 @@ For a non-zero allowance, ``PackedBox::jsonSerialize()`` adds ``allowedOverhang`
 The URLs from ``PackedBox::generateVisualisationURL()`` and ``PackedBoxList::generateVisualisationURL()`` add an
 optional sixth element to each box tuple, after the packed items. It stays a four-value array in left, right,
 front, back order: ``[sides, sides, frontAndBack, frontAndBack]`` (``[150, 150, 300, 300]`` for the example).
-The visualiser still reads any four-value URL, including earlier ones with different allowances at each edge.
-Both additions are omitted for a plain box or an all-zero allowance.
+The visualiser accepts any four non-negative numbers in that order, and ignores the element if it is anything else.
+Both additions are omitted for a plain box or an all-zero allowance. Both read the allowance from the box when
+they are produced (see `Opting in`_).
 
 The :ref:`visualiser<visualiser>` draws the deck outline as usual and the envelope as a dashed amber outline. Item
 positions stay relative to the deck, including negative coordinates. The visualiser draws each edge of the envelope only
 as far as that box's packed items could hang over it: the allowance, but no further than the largest cap among the
 square-placed items. With realistic allowances this is the full envelope. This drawn envelope also sets the spacing and
 scale, including when several boxes are shown together.
+
+The generated URLs point at the published visualiser on ``boxpacker.io``. That page draws the envelope only once it
+is rebuilt from this version. Until then it ignores the sixth element: it draws no envelope, spaces the boxes by
+their decks, and items that hang over can reach into the space of a neighbouring box.

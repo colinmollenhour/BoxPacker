@@ -70,3 +70,5 @@ to retrieve the list of those that were not able to be packed. An example:
 
 An item that fits only with :doc:`allowed overhang<overhang>` can be packed in an opted-in box, provided it meets
 the per-item caps and the other packing constraints; it is not rejected merely for exceeding the deck dimensions.
+The exceptions are strict item ordering (``beStrictAboutItemOrdering()``), single-pass mode and
+``packAcrossWidthOnly()``, which pack the deck only, so such an item is not packed in those modes.

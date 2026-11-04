@@ -58,7 +58,9 @@ fill, in case a callback that depends on what is already in the box now accepts.
 For boxes with :doc:`allowed overhang<overhang>`, the search uses the wider envelope and applies each item's
 per-edge cap at every height; volume utilisation and default cost still use the real deck. After the search, a
 load hanging over an edge is moved as a whole to balance its overhang within those caps, subject to placement
-callbacks accepting the new positions.
+callbacks accepting the new positions. A load found entirely on the deck is not moved. Where the fast packer's
+packing is kept instead (above, and in `Choosing the boxes`_), it can be its layer packing on the deck, which is not
+moved either (see :doc:`overhang`).
 
 Choosing the boxes
 ------------------
@@ -176,7 +178,8 @@ Things the thorough strategy does not do
 ----------------------------------------
 
 ``beStrictAboutItemOrdering()`` and ``packAcrossWidthOnly()`` describe a particular loading sequence, which the block
-search does not follow. When either is set, the fast packer is used.
+search does not follow. When either is set, the fast packer is used, and for a box with
+:doc:`allowed overhang<overhang>` it packs the deck only.
 
 A ``BoxSorter`` or ``PackedBoxSorter`` does not decide which boxes are used, only the order they are returned in (see
 `Choosing the boxes`_).
