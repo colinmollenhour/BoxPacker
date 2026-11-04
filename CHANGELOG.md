@@ -26,8 +26,9 @@
   - When the load moves, placement callbacks are asked again once at the proposed final positions, with only their
     already-moved predecessors as context. On the first refusal, the whole load keeps the position the search found.
     Exceptions propagate out of `pack()`; these extra calls do not use up the search budget
-  - Items with a zero width, length or depth are placed after the load and do not affect its centring: each stays at
-    (0, 0) if it fits the deck, or is centred on its own within its caps if it needs overhang
+  - In a packing found by the block search (Thorough, and Fast's greedy block search), items with a zero width, length
+    or depth are placed after the load and do not affect its centring: each stays at (0, 0) if it fits the deck, or is
+    centred on its own within its caps if it needs overhang. Fast's layer packing places them as it always has
   - `getUsedWidth()` and `getUsedLength()` include the overhang and any gap before a centred load, so
     `getRemainingWidth()` and `getRemainingLength()` can be negative; for a load centred onto the deck they measure
     only the far gap. As items can take up more than the inner volume, `getUnusedVolume()` can be negative too and

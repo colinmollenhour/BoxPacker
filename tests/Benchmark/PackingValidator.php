@@ -17,12 +17,17 @@ use DVDoug\BoxPacker\PackedItem;
 use DVDoug\BoxPacker\Rotation;
 use DVDoug\BoxPacker\Test\BischoffConstrainedTestItem;
 
+use function array_keys;
 use function count;
+use function implode;
 use function intdiv;
 use function iterator_to_array;
 use function max;
 use function min;
+use function reset;
 use function sort;
+use function spl_object_id;
+use function usort;
 
 use const PHP_INT_MAX;
 use const PHP_INT_MIN;
@@ -33,8 +38,8 @@ use const PHP_INT_MIN;
  * For a box with an allowed overhang, the overhang rules are worked out here from first principles rather than with
  * the library's own helpers: an item may hang over an edge by no more than the edge's allowance (the sides allowance
  * at the left and right edges, the front and back one at the front and back edges) and no more than 15 % of its
- * extent across that edge, at any height; items at an angle stay within the box's footprint. So is the balance of a
- * packing that hangs over: see {@see centringProblems()}.
+ * extent across that edge, at any height; items at an angle stay within the box's footprint. So are the balance of a
+ * packing that hangs over (see {@see centringProblems()}) and the move that balanced it (see {@see shiftProblems()}).
  */
 final class PackingValidator
 {
@@ -121,6 +126,90 @@ final class PackingValidator
     }
 
     /**
+     * How a packing in a box with an allowed overhang was moved to balance it other than as the rule says, given where
+     * its items were before the move (matched to the packed items by their Item objects). Every item with a volume must
+     * have moved by the same amount; items with no volume are placed after the move, so are left out. The move along
+     * each axis is worked out here from the items before it alone: none on an axis on which nothing hangs over an edge
+     * (a gap counting as a negative overhang); else half the difference of the two overhangs, rounded towards zero (so
+     * of two equally good moves, the smaller), but no further than keeps every item within its limits at both edges
+     * (an item at an angle within the box). Not to be used for a packing that kept its position because a placement
+     * callback refused a balanced one.
+     *
+     * @param  iterable<PackedItem> $before
+     * @return list<string>         problems found (empty = moved as it should have been, or not moved if it should not)
+     */
+    public static function shiftProblems(iterable $before, PackedBox $after): array
+    {
+        $box = $after->box;
+        $allowance = $box instanceof OverhangBox ? $box->getAllowedOverhang() : new AllowedOverhang();
+        $load = $was = [];
+        foreach ($before as $item) {
+            if ($item->width * $item->length * $item->depth > 0) {
+                $load[] = $item;
+                $was[spl_object_id($item->item)][] = $item;
+            }
+        }
+        $is = [];
+        foreach ($after->items as $item) {
+            if ($item->width * $item->length * $item->depth > 0) {
+                $is[spl_object_id($item->item)][] = $item;
+            }
+        }
+
+        // an Item object may be packed more than once: a move keeps the order of its placements by position, so pair
+        // them up in that order
+        $problems = $moves = [];
+        foreach ($is + $was as $id => $placements) {
+            $wasPlaced = self::byPosition($was[$id] ?? []);
+            $isPlaced = self::byPosition($is[$id] ?? []);
+            $description = $placements[0]->item->getDescription();
+            for ($i = count($wasPlaced); $i < count($isPlaced); ++$i) {
+                $problems[] = "{$description} was not in the packing before the move";
+            }
+            for ($i = count($isPlaced); $i < count($wasPlaced); ++$i) {
+                $problems[] = "{$description} was not in the packing after the move";
+            }
+            for ($i = 0; $i < min(count($wasPlaced), count($isPlaced)); ++$i) {
+                [$a, $b] = [$wasPlaced[$i], $isPlaced[$i]];
+                if ([$b->z, $b->width, $b->length, $b->depth, $b->angle] !== [$a->z, $a->width, $a->length, $a->depth, $a->angle]) {
+                    $problems[] = "{$description} was changed other than by moving it across the floor";
+                }
+                $move = [$b->x - $a->x, $b->y - $a->y];
+                $moves["{$move[0]},{$move[1]}"] = $move;
+            }
+        }
+        if ($moves === []) {
+            return $problems;
+        }
+        if (count($moves) > 1) {
+            $problems[] = 'items were moved by different amounts: ' . implode(' and ', array_keys($moves));
+
+            return $problems;
+        }
+
+        $expected = [];
+        foreach (self::axes($box->getInnerWidth(), $box->getInnerLength(), $allowance) as $axis => [$span, $axisAllowance, $extents]) {
+            [$overhangBefore, $overhangAfter, $lowest, $highest] = self::reach($load, $span, $axisAllowance, $extents);
+            if ($overhangBefore <= 0 && $overhangAfter <= 0) {
+                $expected[] = 0; // nothing hangs over on this axis
+                continue;
+            }
+            if ($lowest > 0 || $highest < 0) {
+                $problems[] = "the load was beyond its limits along {$axis} before the move";
+            }
+            $difference = $overhangBefore - $overhangAfter;
+            $half = (int) (($difference - $difference % 2) / 2); // % takes the sign of the difference: rounded towards 0
+            $expected[] = max($lowest, min($highest, $half));
+        }
+        $move = reset($moves);
+        if ($move !== $expected) {
+            $problems[] = "the load was moved by {$move[0]},{$move[1]}, but should have been moved by {$expected[0]},{$expected[1]}";
+        }
+
+        return $problems;
+    }
+
+    /**
      * Smallest fraction of any item's base resting on the floor or on the top of another item. For a box with an
      * allowed overhang, the floor under an item on it is the box's footprint widened by the item's own overhang limits
      * (the footprint alone for an item at an angle), and any part of its base beyond that is unsupported.
@@ -188,25 +277,9 @@ final class PackingValidator
         if ($items === []) {
             return [];
         }
-        $axes = [
-            'x' => [$width, $allowance->sides, static fn (PackedItem $item): array => [$item->x, $item->boundingWidth, $item->width]],
-            'y' => [$length, $allowance->frontAndBack, static fn (PackedItem $item): array => [$item->y, $item->boundingLength, $item->length]],
-        ];
         $problems = [];
-        foreach ($axes as $axis => [$span, $axisAllowance, $extents]) {
-            $low = $high = null;
-            $lowest = PHP_INT_MIN; // the most negative move that keeps every item within its limits
-            $highest = PHP_INT_MAX;
-            foreach ($items as $item) {
-                [$position, $extent, $ownExtent] = $extents($item);
-                $limit = $item->isAngled() ? 0 : min($axisAllowance, self::limit($ownExtent));
-                $low = $low === null ? $position : min($low, $position);
-                $high = $high === null ? $position + $extent : max($high, $position + $extent);
-                $lowest = max($lowest, -$limit - $position);
-                $highest = min($highest, $span + $limit - $position - $extent);
-            }
-            $before = -$low;
-            $after = $high - $span;
+        foreach (self::axes($width, $length, $allowance) as $axis => [$span, $axisAllowance, $extents]) {
+            [$before, $after, $lowest, $highest] = self::reach($items, $span, $axisAllowance, $extents);
             if ($before <= 0 && $after <= 0) {
                 continue; // nothing hangs over on this axis
             }
@@ -220,6 +293,56 @@ final class PackingValidator
         }
 
         return $problems;
+    }
+
+    /**
+     * @param  list<PackedItem> $items
+     * @return list<PackedItem>
+     */
+    private static function byPosition(array $items): array
+    {
+        usort($items, static fn (PackedItem $a, PackedItem $b): int => [$a->x, $a->y, $a->z, $a->width, $a->length, $a->depth, $a->angle] <=> [$b->x, $b->y, $b->z, $b->width, $b->length, $b->depth, $b->angle]);
+
+        return $items;
+    }
+
+    /**
+     * Each axis of the floor: its span, its allowance at each of its two edges, and an item's position along it, the
+     * extent of its bounding box along it and its own extent along it.
+     *
+     * @return array<string, array{0: int, 1: int, 2: callable(PackedItem): array{0: int, 1: int, 2: int}}>
+     */
+    private static function axes(int $width, int $length, AllowedOverhang $allowance): array
+    {
+        return [
+            'x' => [$width, $allowance->sides, static fn (PackedItem $item): array => [$item->x, $item->boundingWidth, $item->width]],
+            'y' => [$length, $allowance->frontAndBack, static fn (PackedItem $item): array => [$item->y, $item->boundingLength, $item->length]],
+        ];
+    }
+
+    /**
+     * Where some items reach along an axis (see {@see axes()}): how far they hang over its low edge and its high edge
+     * (negative: a gap), and the most negative and most positive moves that keep every item within its limits.
+     *
+     * @param  non-empty-list<PackedItem>                          $items
+     * @param  callable(PackedItem): array{0: int, 1: int, 2: int} $extents
+     * @return array{0: int, 1: int, 2: int, 3: int}
+     */
+    private static function reach(array $items, int $span, int $axisAllowance, callable $extents): array
+    {
+        $low = $high = null;
+        $lowest = PHP_INT_MIN;
+        $highest = PHP_INT_MAX;
+        foreach ($items as $item) {
+            [$position, $extent, $ownExtent] = $extents($item);
+            $limit = $item->isAngled() ? 0 : min($axisAllowance, self::limit($ownExtent));
+            $low = $low === null ? $position : min($low, $position);
+            $high = $high === null ? $position + $extent : max($high, $position + $extent);
+            $lowest = max($lowest, -$limit - $position);
+            $highest = min($highest, $span + $limit - $position - $extent);
+        }
+
+        return [-$low, $high - $span, $lowest, $highest];
     }
 
     /**

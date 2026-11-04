@@ -167,6 +167,95 @@ class PackingValidatorTest extends TestCase
         self::assertSame([], PackingValidator::centringProblems(new PackedBox(new TestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, 1000), $list)));
     }
 
+    /**
+     * A packing in a 1000 × 1000 box with the allowance as it was before a move and as it is after, built without the
+     * box's own checks.
+     *
+     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int}> $items [x, y, width, length, depth (100 if not given)] before
+     * @param  list<array{0: int, 1: int}>                          $moves [x, y] by which each item moved
+     * @return array{0: list<PackedItem>, 1: PackedBox}
+     */
+    private static function moved(AllowedOverhang $allowance, array $items, array $moves): array
+    {
+        $before = [];
+        $after = new PackedItemList();
+        foreach ($items as $index => [$x, $y, $width, $length]) {
+            $depth = $items[$index][4] ?? 100;
+            $item = new TestItem("Item {$index}", $width, $length, $depth, 0, Rotation::Never);
+            [$moveX, $moveY] = $moves[$index] ?? $moves[0];
+            $before[] = new PackedItem($item, $x, $y, 0, $width, $length, $depth);
+            $after->insert(new PackedItem($item, $x + $moveX, $y + $moveY, 0, $width, $length, $depth));
+        }
+        $class = new ReflectionClass(PackedBox::class);
+        $packedBox = $class->newInstanceWithoutConstructor();
+        $class->getProperty('box')->setValue($packedBox, new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, 1000, $allowance));
+        $class->getProperty('items')->setValue($packedBox, $after);
+
+        return [$before, $packedBox];
+    }
+
+    /**
+     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int}> $items
+     * @param  list<array{0: int, 1: int}>                          $moves
+     * @return list<string>
+     */
+    private static function shiftProblems(AllowedOverhang $allowance, array $items, array $moves): array
+    {
+        return PackingValidator::shiftProblems(...self::moved($allowance, $items, $moves));
+    }
+
+    public function testShift(): void
+    {
+        $allowance = new AllowedOverhang(sides: 200, frontAndBack: 200);
+
+        // 100 over the left and a gap of 50 at the right: moved by half the difference, 75; along y, nothing hangs over
+        self::assertSame([], self::shiftProblems($allowance, [[-100, 0, 1050, 1000]], [[75, 0]]));
+        self::assertSame(['the load was moved by 74,0, but should have been moved by 75,0'], self::shiftProblems($allowance, [[-100, 0, 1050, 1000]], [[74, 0]]));
+        // and the same along y
+        self::assertSame([], self::shiftProblems($allowance, [[0, -100, 1000, 1050]], [[0, 75]]));
+        // nothing hangs over: not moved, though the gaps are unequal
+        self::assertSame([], self::shiftProblems($allowance, [[0, 300, 500, 500]], [[0, 0]]));
+        self::assertSame(['the load was moved by 250,250, but should have been moved by 0,0'], self::shiftProblems($allowance, [[0, 0, 500, 500]], [[250, 250]]));
+        // a move that is not needed at all
+        self::assertSame(['the load was moved by 1,0, but should have been moved by 0,0'], self::shiftProblems($allowance, [[-77, 0, 1153, 1000]], [[1, 0]]));
+    }
+
+    public function testShiftOfAnOddDifferenceIsTheSmallerMove(): void
+    {
+        $allowance = new AllowedOverhang(sides: 200);
+
+        // 150 over the left and 3 over the right: 73.5 would balance it, and 73 is the smaller of the two equally good
+        // moves; mirrored, -73, not -74 (rounded towards zero, not down)
+        self::assertSame([], self::shiftProblems($allowance, [[-150, 0, 1153, 1000]], [[73, 0]]));
+        self::assertSame(['the load was moved by 74,0, but should have been moved by 73,0'], self::shiftProblems($allowance, [[-150, 0, 1153, 1000]], [[74, 0]]));
+        self::assertSame([], self::shiftProblems($allowance, [[-3, 0, 1153, 1000]], [[-73, 0]]));
+        self::assertSame(['the load was moved by -74,0, but should have been moved by -73,0'], self::shiftProblems($allowance, [[-3, 0, 1153, 1000]], [[-74, 0]]));
+    }
+
+    public function testShiftIsHeldBackByTheCaps(): void
+    {
+        $allowance = new AllowedOverhang(sides: 200);
+
+        // 95 would balance the load, but the narrow item (cap 15) may only move 50 before it hangs too far over the right
+        self::assertSame([], self::shiftProblems($allowance, [[-170, 0, 1150, 500], [865, 500, 100, 500]], [[50, 0]]));
+        self::assertSame(['the load was moved by 95,0, but should have been moved by 50,0'], self::shiftProblems($allowance, [[-170, 0, 1150, 500], [865, 500, 100, 500]], [[95, 0]]));
+        // and no move at all if every move is held back
+        self::assertSame([], self::shiftProblems($allowance, [[22, 0, 1150, 500], [-15, 500, 100, 500]], [[0, 0]]));
+    }
+
+    public function testShiftMovesTheWholeLoad(): void
+    {
+        $allowance = new AllowedOverhang(sides: 200);
+
+        self::assertSame(['items were moved by different amounts: 75,0 and 70,0'], self::shiftProblems($allowance, [[-100, 0, 1050, 500], [-100, 500, 1050, 500]], [[75, 0], [70, 0]]));
+        // items with no volume are placed after the move, so may be anywhere
+        self::assertSame([], self::shiftProblems($allowance, [[-100, 0, 1050, 500], [0, 0, 1100, 500, 0]], [[75, 0], [-50, 0]]));
+
+        [$before, $after] = self::moved($allowance, [[-100, 0, 1050, 500], [-100, 500, 1050, 500]], [[75, 0]]);
+        self::assertSame(['Item 2 was not in the packing after the move'], PackingValidator::shiftProblems([...$before, new PackedItem(new TestItem('Item 2', 1050, 500, 100, 0, Rotation::Never), -100, 0, 0, 1050, 500, 100)], $after));
+        self::assertSame(['Item 1 was not in the packing before the move'], PackingValidator::shiftProblems([$before[0]], $after));
+    }
+
     public function testLargeExtentFloorSupport(): void
     {
         $box = self::box(new AllowedOverhang(sides: 200000000000000000));

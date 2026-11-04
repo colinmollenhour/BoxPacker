@@ -159,10 +159,11 @@ load keeps the valid position the search found, which may leave its overhang unb
 calls when the load does not move. A callback that counts calls sees these extra calls; an exception thrown during this
 check propagates out of ``pack()``. These calls do not use up the search budget.
 
-Items with a zero width, length or depth are placed after the load and do not affect its centring. Each is placed
-on its own: one that fits the deck stays at (0, 0); one that needs overhang is centred within its own caps.
-A constrained flat item is asked once at that position with the final items already packed as context, and is
-skipped if it refuses.
+In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
+length or depth are placed after the load and do not affect its centring. Each is placed on its own: one that fits
+the deck stays at (0, 0); one that needs overhang is centred within its own caps. A constrained flat item is asked
+once at that position with the final items already packed as context, and is skipped if it refuses. Fast's layer
+packing places such items as it always has.
 
 The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole load. ``Thorough`` packs 8 lying flat
 at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at

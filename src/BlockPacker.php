@@ -212,8 +212,9 @@ class BlockPacker implements LoggerAwareInterface
     private int $totalItems = 0;
 
     /**
-     * Items with a zero dimension. They occupy no volume, so they are placed on the floor in the corner once the
-     * rest of the load has been packed.
+     * Items with a zero dimension. They occupy no volume, so they are placed on the floor once the rest of the load has
+     * been packed (and, with an allowed overhang, moved to balance it): in the corner, or, if one only fits the box with
+     * its overhang, hanging over equally on its own.
      *
      * @var list<Item>
      */
@@ -1702,7 +1703,8 @@ class BlockPacker implements LoggerAwareInterface
     private function centred(BlockSearchState $state, PackedItemList $list): PackedItemList
     {
         assert($this->overhang !== null);
-        [$shiftX, $shiftY] = $this->overhang->centringShift($list);
+        // measured on a copy: iterating a PackedItemList sorts it, and the list returned keeps the order of placement
+        [$shiftX, $shiftY] = $this->overhang->centringShift(clone $list);
         if ($shiftX === 0 && $shiftY === 0) {
             return $list;
         }
