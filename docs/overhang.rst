@@ -156,11 +156,11 @@ on a 48 × 40 in pallet with 3 in allowances ends at x = 18 in, y = 14 in. Fast'
 in the corner. For the centred cube, ``getUsedWidth()`` is 30 in, including the 18 in gap before it, and
 ``getRemainingWidth()`` is only the 18 in far gap.
 
-When the load moves, each ``ConstrainedPlacementItem`` is asked again once, in packing order, at its proposed final
-position, with only its already-moved predecessors as context. On the first refusal, the check stops (later items are
-not asked) and the whole load keeps the valid position the search found, which may leave its overhang unbalanced. This check makes no extra
-calls when the load does not move. A callback that counts calls sees these extra calls; an exception thrown during this
-check propagates out of ``pack()``. These calls do not use up the search budget.
+When the load moves, each ``ConstrainedPlacementItem`` is asked again, in packing order, at its proposed final
+position, with only its already-moved predecessors as context. On the first refusal the check stops (later items are
+not asked) and the whole load keeps the valid position the search found, which may leave its overhang unbalanced.
+This check makes no extra calls when the load does not move. A callback that counts calls sees these extra calls;
+an exception thrown during this check propagates out of ``pack()``. These calls do not use up the search budget.
 
 In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
 length or depth are placed after the load and do not affect its centring. Each is placed on its own: one that fits
@@ -172,8 +172,8 @@ The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole loa
 at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at
 0.77 / 0.76 in, but the load cannot move front to back. The flat stack is at its own 2.50 in front limit, and the
 back row is at its own 1.13 in back limit (15% of its 7.56 in packed length, rounded down, as it stands on a long
-edge). The load stays 2.50 in over the
-front and 1.13 in over the back, with a 5.99 in gap inside it. Moving the load as a whole cannot close that gap.
+edge). The load stays 2.50 in over the front and 1.13 in over the back, with a 5.99 in gap inside it. Moving the load
+as a whole cannot close that gap.
 
 Support
 -------
