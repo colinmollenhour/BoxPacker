@@ -14,6 +14,7 @@ use JsonSerializable;
 use function iterator_to_array;
 use function json_encode;
 use function max;
+use function min;
 use function round;
 use function is_iterable;
 use function count;
@@ -67,7 +68,8 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Get remaining width inside box for another item.
+     * Get remaining width inside box for another item: inner width less used width (negative if items hang over the
+     * sides of a box with an allowed overhang by more than is left).
      */
     public function getRemainingWidth(): int
     {
@@ -75,7 +77,8 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Get remaining length inside box for another item.
+     * Get remaining length inside box for another item: inner length less used length (negative if items hang over
+     * the front or back of a box with an allowed overhang by more than is left).
      */
     public function getRemainingLength(): int
     {
@@ -91,31 +94,38 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Used width inside box for packing items.
+     * Used width inside box for packing items: from x = 0 (or the leftmost item, if it hangs over the left side of a
+     * box with an allowed overhang) to the rightmost item. A load that a box with an allowed overhang has moved off
+     * x = 0 to balance its overhang counts the gap at the left as used.
      */
     public function getUsedWidth(): int
     {
+        $minX = 0;
         $maxWidth = 0;
 
         foreach ($this->items as $item) {
+            $minX = min($minX, $item->x);
             $maxWidth = max($maxWidth, $item->x + $item->boundingWidth);
         }
 
-        return $maxWidth;
+        return $maxWidth - $minX;
     }
 
     /**
-     * Used length inside box for packing items.
+     * Used length inside box for packing items: from y = 0 (or the frontmost item, if it hangs over the front of a box
+     * with an allowed overhang) to the backmost item. As with the width, a gap at the front counts as used.
      */
     public function getUsedLength(): int
     {
+        $minY = 0;
         $maxLength = 0;
 
         foreach ($this->items as $item) {
+            $minY = min($minY, $item->y);
             $maxLength = max($maxLength, $item->y + $item->boundingLength);
         }
 
-        return $maxLength;
+        return $maxLength - $minY;
     }
 
     /**
@@ -154,7 +164,8 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Get unused volume of the packed box.
+     * Get unused volume of the packed box (negative if items hanging over the edges of a box with an allowed overhang
+     * take up more than its inner volume).
      */
     public function getUnusedVolume(): int
     {
@@ -162,7 +173,8 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Get volume utilisation of the packed box.
+     * Get volume utilisation of the packed box, as a percentage of its inner volume (so over 100 if items hanging over
+     * the edges of a box with an allowed overhang take up more than that).
      */
     public function getVolumeUtilisation(): float
     {
@@ -200,6 +212,7 @@ readonly class PackedBox implements JsonSerializable
                 static fn (PackedItem $item) => [$splIdToIntMap[spl_object_id($item->item)], $item->x, $item->y, $item->z, $item->width, $item->length, $item->depth, ...($item->isAngled() ? [round($item->angle, 3)] : [])],
                 iterator_to_array($this->items)
             ),
+            ...OverhangBounds::visualiserElements($this->box),
         ];
 
         return 'https://boxpacker.io/en/master/visualiser.html#packing=' . rawurlencode(json_encode($data, flags: JSON_THROW_ON_ERROR | JSON_NUMERIC_CHECK | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -223,6 +236,11 @@ readonly class PackedBox implements JsonSerializable
             }
         }
 
+        $overhang = [];
+        if ($this->box instanceof OverhangBox && OverhangBounds::forBox($this->box) !== null) {
+            $overhang = ['allowedOverhang' => $this->box->getAllowedOverhang()];
+        }
+
         return [
             'box' => [
                 ...$userValues,
@@ -230,14 +248,16 @@ readonly class PackedBox implements JsonSerializable
                 'innerWidth' => $this->box->getInnerWidth(),
                 'innerLength' => $this->box->getInnerLength(),
                 'innerDepth' => $this->box->getInnerDepth(),
+                ...$overhang,
             ],
             'items' => iterator_to_array($this->items),
         ];
     }
 
     /**
-     * Geometric and weight invariants of a finished box: in-bounds, no overlaps,
-     * legal item orientation, under max weight.
+     * Geometric and weight invariants of a finished box: in-bounds (within the caps
+     * of any allowed overhang), no overlaps (among items with a volume), legal item
+     * orientation, under max weight.
      *
      * Placement callbacks and linked-group membership need the live unpacked list
      * and are enforced at pack time, not here.
@@ -246,20 +266,33 @@ readonly class PackedBox implements JsonSerializable
     {
         assert($this->getWeight() <= $this->box->getMaxWeight());
 
+        $overhang = OverhangBounds::forBox($this->box);
+
         /** @var PackedItem[] $itemsToCheck */
         $itemsToCheck = iterator_to_array($this->items);
         while (count($itemsToCheck) > 0) {
             $itemToCheck = array_pop($itemsToCheck);
 
-            assert($itemToCheck->x >= 0);
-            assert($itemToCheck->x + $itemToCheck->boundingWidth <= $this->box->getInnerWidth());
-            assert($itemToCheck->y >= 0);
-            assert($itemToCheck->y + $itemToCheck->boundingLength <= $this->box->getInnerLength());
-            assert($itemToCheck->z >= 0);
-            assert($itemToCheck->z + $itemToCheck->depth <= $this->box->getInnerDepth());
+            if ($overhang !== null) {
+                assert($overhang->admitsPackedItem($itemToCheck));
+            } else {
+                assert($itemToCheck->x >= 0);
+                assert($itemToCheck->x + $itemToCheck->boundingWidth <= $this->box->getInnerWidth());
+                assert($itemToCheck->y >= 0);
+                assert($itemToCheck->y + $itemToCheck->boundingLength <= $this->box->getInnerLength());
+                assert($itemToCheck->z >= 0);
+                assert($itemToCheck->z + $itemToCheck->depth <= $this->box->getInnerDepth());
+            }
             assert($this->packedDimensionsMatchItem($itemToCheck));
 
+            // an item with no volume (a zero width, length or depth) takes no space, so cannot collide with another
+            if ($itemToCheck->width * $itemToCheck->length * $itemToCheck->depth === 0) {
+                continue;
+            }
             foreach ($itemsToCheck as $otherItem) {
+                if ($otherItem->width * $otherItem->length * $otherItem->depth === 0) {
+                    continue;
+                }
                 $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->boundingWidth) && $otherItem->x < ($itemToCheck->x + $itemToCheck->boundingWidth);
                 $hasYOverlap = $itemToCheck->y < ($otherItem->y + $otherItem->boundingLength) && $otherItem->y < ($itemToCheck->y + $itemToCheck->boundingLength);
                 $hasZOverlap = $itemToCheck->z < ($otherItem->z + $otherItem->depth) && $otherItem->z < ($itemToCheck->z + $itemToCheck->depth);

@@ -55,6 +55,11 @@ asked about each item of a block in turn; if one refuses part of the way through
 tried instead. A space where every block was refused is set aside, and offered again once there is nothing else to
 fill, in case a callback that depends on what is already in the box now accepts.
 
+For boxes with :doc:`allowed overhang<overhang>`, the search uses the wider envelope and applies each item's
+per-edge cap at every height; volume utilisation and default cost still use the real deck. After the search, a
+load hanging over an edge is moved as a whole to balance its overhang within those caps, subject to placement
+callbacks accepting the new positions.
+
 Choosing the boxes
 ------------------
 
@@ -114,13 +119,16 @@ Support
 -------
 
 Every item packed by the thorough strategy rests on the floor of the box or on the tops of other items. By default
-at least half of each item's base must be supported; you can require more (``1.0`` = no overhang at all, e.g. for
-pallets) or less (``0.0`` places no requirement at all, like the fast packer):
+at least half of each item's base must be supported; you can require more (``1.0`` = full support from below, e.g. for
+pallets) or less (``0.0`` places no requirement at all):
 
 .. code-block:: php
 
     <?php
         $volumePacker->setMinimumSupport(1.0);
+
+Legal :doc:`overhang past the deck<overhang>` counts as supported for floor items, even at ``1.0``; items above
+the floor still need the configured support from other items.
 
 Support is part of what the thorough strategy optimises, and it costs density. Even the default does: packed in 3D, the
 4,288 bookshop orders need 4,560 cartons with 50% support but 4,547 with none, and the fast packer (which has no

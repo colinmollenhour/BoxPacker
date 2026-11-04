@@ -17,6 +17,11 @@ interface ConstrainedPlacementItem extends Item
 {
     /**
      * Hook for user implementation of item-specific constraints, e.g. max <x> batteries per box.
+     *
+     * For a box with an allowed overhang ({@see OverhangBox}), an item may be asked again after the search, at its
+     * proposed final position once the packing has been moved to balance its overhang, with the items packed before it
+     * (also at their proposed final positions) in the box. If it or any later item refuses, the whole packing keeps the
+     * position it was found in, so accepting is not a commitment.
      */
     public function canBePacked(
         PackedBox $packedBox,

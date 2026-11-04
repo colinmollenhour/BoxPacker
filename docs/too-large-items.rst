@@ -67,3 +67,6 @@ to retrieve the list of those that were not able to be packed. An example:
 
         // It is *very* important to check this is an empty list (or not) when exceptions are disabled!
         $unpackedItems = $packer->getUnpackedItems();
+
+An item that fits only with :doc:`allowed overhang<overhang>` can be packed in an opted-in box, provided it meets
+the per-item caps and the other packing constraints; it is not rejected merely for exceeding the deck dimensions.

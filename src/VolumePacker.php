@@ -146,8 +146,9 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
-     * Thorough strategy only: the minimum fraction (0-1) of each item's base that must rest on the box floor or on
-     * other items. Defaults to 0.5.
+     * The minimum fraction (0-1) of each item's base that must rest on the box floor or on other items. Defaults to
+     * 0.5. Used by the Thorough strategy, and by the Fast strategy where it packs with the block search (with angled
+     * placement, or for a box with an allowed overhang).
      */
     public function setMinimumSupport(float $fraction): void
     {
@@ -201,10 +202,63 @@ class VolumePacker implements LoggerAwareInterface
         }
 
         if ($this->useThorough()) {
+            // the layer packer alone, on the deck even for a box with an allowed overhang: Fast's greedy block search
+            // for such a box would only repeat the search's own first greedy completion
             return $this->packThoroughWithFallback($this->packFast(...));
         }
 
+        return $this->packFastRouted();
+    }
+
+    /**
+     * The Fast strategy: for a box with an allowed overhang, a greedy block search that uses it (unless items must be
+     * packed in order, in a single pass or across the width only, which only the layer packer does, on the deck
+     * alone), else the layer packer, or with angled placement allowed a greedy block search if an item needs it.
+     */
+    private function packFastRouted(): PackedBox
+    {
+        if ($this->usesOverhangBlockSearch()) {
+            return $this->packOverhangFast();
+        }
+
         return $this->needsAngledPlacement() ? $this->packAngledFast() : $this->packFast();
+    }
+
+    /**
+     * Whether the box has an allowed overhang that the Fast strategy can use (the layer packer cannot, so the block
+     * search is needed, which in turn needs the freedom to reorder items and to build the load in its own way).
+     */
+    private function usesOverhangBlockSearch(): bool
+    {
+        if (OverhangBounds::forBox($this->box) === null) {
+            return false;
+        }
+        if ($this->singlePassMode || $this->beStrictAboutItemOrdering || $this->packAcrossWidthOnly) {
+            $this->logger->debug("Allowed overhang not used for box {$this->box->getReference()}: items are packed in order, in a single pass or across the width only");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Fast strategy for a box with an allowed overhang: a greedy block search (which uses the overhang) or the layer
+     * packer (which packs the deck alone), whichever packs more volume (or as much, but more items). So it never packs
+     * less volume than the layer packer on the deck alone, though it may pack fewer items.
+     */
+    private function packOverhangFast(): PackedBox
+    {
+        $blockPacker = new BlockPacker($this->box, $this->items);
+        $blockPacker->setLogger($this->logger);
+        $blockPacker->setMaxBeamWidth(1);
+        $blockPacker->setMinimumSupport($this->minimumSupport);
+        $blockPacker->setAllowAngledPlacement($this->allowAngledPlacement);
+        $blockPacker->setTimeoutChecker($this->timeoutChecker);
+        $overhanging = $blockPacker->pack();
+        $this->recordSearch($blockPacker);
+
+        return self::denser($this->packFast(), $overhanging);
     }
 
     /**
@@ -256,8 +310,8 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * Thorough strategy: the block search, and for all but very large item lists also the fast packer (keeping
-     * the denser of the two, provided the fast packing is supported well enough) unless the search already packed
-     * everything or ran out of time.
+     * the denser of the two, provided the fast packing is supported well enough and, for a box with an allowed
+     * overhang, within its caps) unless the search already packed everything or ran out of time.
      *
      * @param callable(): PackedBox $fastPacker
      */
@@ -269,7 +323,7 @@ class VolumePacker implements LoggerAwareInterface
         }
 
         $fast = $fastPacker();
-        if (SupportCalculator::minimumSupport($fast->items) < $this->minimumSupport) {
+        if (!OverhangBounds::packingIsLegal($this->box, $fast->items) || SupportCalculator::minimumSupport($fast->items, $this->box) < $this->minimumSupport) {
             return $thorough;
         }
 

@@ -34,3 +34,7 @@ If :doc:`angled placement<angled-placement>` is enabled, an item may be turned a
 is then non-zero, x and y are the corner of its bounding box and ``boundingWidth`` × ``boundingLength`` its extent.
 
 A :ref:`visualiser<visualiser>` is also available.
+
+For a box with :doc:`allowed overhang<overhang>`, the origin stays at the deck's left-front corner: x or y can be
+negative, and an item can end past the inner width or length. Positions reflect any move to balance the load's
+overhang, subject to placement callbacks accepting the new positions.

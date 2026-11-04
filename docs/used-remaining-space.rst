@@ -8,8 +8,13 @@ alternative/additional sizes of box.
 At a high level, the ``getVolumeUtilisation()`` method exists which calculates how full the box is as a percentage of volume.
 
 Lower-level methods are also available for examining this data in detail either using ``getUsed[Width|Length|Depth()]``
-(a hypothetical box placed around the items) or ``getRemaining[Width|Length|Depth()]`` (the difference between the dimensions of
-the actual box and the hypothetical box).
+(the span covering the origin and the items) or ``getRemaining[Width|Length|Depth()]`` (the difference between the
+inner dimensions of the actual box and that span).
+
+With :doc:`allowed overhang<overhang>`, used width and length include overhang on either side of the origin, so
+remaining width and length can be negative. Volume measurements stay based on the deck: utilisation can exceed
+100% and unused volume can be negative. For a load centred onto the deck, the gap before the load counts as used,
+so remaining width or length is only the far gap.
 
 .. note::
 

@@ -11,6 +11,7 @@ import {
     ArcRotateCamera,
     Color3,
     CreateBox,
+    CreateLineSystem,
     CreateLines,
     CreatePlane,
     DynamicTexture,
@@ -101,6 +102,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 number,
                 number,
                 [number, number, number, number, number, number, number, number?][],
+                [number, number, number, number]?,
             ],
         ) => {
             const packedItems: PackedItem[] = [];
@@ -139,6 +141,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     packedBox[2],
                     packedBox[3],
                     packedItems,
+                    packedBox[5],
                 ),
             );
         },
@@ -155,11 +158,11 @@ document.addEventListener("DOMContentLoaded", function () {
     let maxBoxLength = 0;
     let maxBoxDepth = 0;
     for (const packedBox of packedBoxes) {
-        maxBoxWidth = Math.max(maxBoxWidth, packedBox.width);
-        maxBoxLength = Math.max(maxBoxLength, packedBox.length);
+        maxBoxWidth = Math.max(maxBoxWidth, packedBox.envelopeWidth());
+        maxBoxLength = Math.max(maxBoxLength, packedBox.envelopeLength());
         maxBoxDepth = Math.max(maxBoxDepth, packedBox.depth);
     }
-    // Cell pitch = box footprint + half-box gap so neighbours stay readable.
+    // Cell pitch = envelope footprint + half-envelope gap so neighbours stay readable.
     const cellWidth = maxBoxWidth * 1.5;
     const cellLength = maxBoxLength * 1.5;
     const layoutMaxX = (gridCols - 1) * cellWidth + maxBoxWidth;
@@ -519,8 +522,10 @@ document.addEventListener("DOMContentLoaded", function () {
         packedBoxes.forEach((packedBox, index) => {
             const col = index % gridCols;
             const row = Math.floor(index / gridCols);
-            const boxPlacementX = scale * col * cellWidth;
-            const boxPlacementZ = scale * row * cellLength;
+            const [left, right, front, back] = packedBox.usableOverhang;
+            // Keep the envelope in its cell, with item coordinates relative to the deck.
+            const boxPlacementX = scale * col * cellWidth + scale * left;
+            const boxPlacementZ = scale * row * cellLength + scale * front;
 
             showAxis(
                 scale * packedBox.width,
@@ -549,6 +554,50 @@ document.addEventListener("DOMContentLoaded", function () {
             drawnBox.position.x = boxPlacementX + (scale * packedBox.width) / 2;
             drawnBox.position.z = boxPlacementZ + (scale * packedBox.length) / 2;
             drawnBox.position.y = (scale * packedBox.depth) / 2;
+
+            if (left || right || front || back) {
+                const x1 = boxPlacementX - scale * left;
+                const x2 = boxPlacementX + scale * (packedBox.width + right);
+                const z1 = boxPlacementZ - scale * front;
+                const z2 = boxPlacementZ + scale * (packedBox.length + back);
+                const height = scale * packedBox.depth;
+                const corners = [
+                    new Vector3(x1, 0, z1),
+                    new Vector3(x2, 0, z1),
+                    new Vector3(x2, 0, z2),
+                    new Vector3(x1, 0, z2),
+                ];
+                const top = corners.map((corner) =>
+                    corner.add(new Vector3(0, height, 0)),
+                );
+                const edges = [
+                    ...[corners, top].flatMap((face) =>
+                        face.map((corner, i) => [corner, face[(i + 1) % 4]]),
+                    ),
+                    ...corners.map((corner, i) => [corner, top[i]]),
+                ];
+                // Dashed and amber, to tell it from the white deck outline. The
+                // dashes are made by hand so they are as long on every edge.
+                const dash = Math.max(x2 - x1, z2 - z1, height) / 60;
+                const lines: Vector3[][] = [];
+                for (const [from, to] of edges) {
+                    const edgeLength = Vector3.Distance(from, to);
+                    for (let start = 0; start < edgeLength; start += 2 * dash) {
+                        const end = Math.min(start + dash, edgeLength);
+                        lines.push([
+                            Vector3.Lerp(from, to, start / edgeLength),
+                            Vector3.Lerp(from, to, end / edgeLength),
+                        ]);
+                    }
+                }
+                const outline = CreateLineSystem(
+                    `Envelope #${index}`,
+                    {lines},
+                    scene,
+                );
+                outline.isPickable = false;
+                outline.color = new Color3(1, 0.75, 0.35);
+            }
 
             packedBox.packedItems.forEach((packedItem: PackedItem, itemIndex) => {
                 let drawnItem = CreateBox(
@@ -651,13 +700,53 @@ class Item {
 }
 
 class PackedBox {
+    // How far the packed items could hang over each edge (left, right, front,
+    // back): the allowance, but no more than the largest cap among them (15% of
+    // the item's width or length, rounded down). Angled items stay on the deck.
+    // The envelope is drawn and spaced using this, so a huge allowance does not
+    // shrink the load to a speck.
+    public readonly usableOverhang: readonly [number, number, number, number];
+
     constructor(
         public readonly reference: string,
         public readonly width: number,
         public readonly length: number,
         public readonly depth: number,
         public readonly packedItems: PackedItem[],
-    ) {}
+        public readonly allowedOverhang: readonly [number, number, number, number] = [
+            0, 0, 0, 0,
+        ],
+    ) {
+        let capWidth = 0;
+        let capLength = 0;
+        for (const packedItem of packedItems) {
+            if (packedItem.angle === 0) {
+                capWidth = Math.max(
+                    capWidth,
+                    Math.floor((15 * packedItem.width) / 100),
+                );
+                capLength = Math.max(
+                    capLength,
+                    Math.floor((15 * packedItem.length) / 100),
+                );
+            }
+        }
+        const [left, right, front, back] = allowedOverhang;
+        this.usableOverhang = [
+            Math.min(left, capWidth),
+            Math.min(right, capWidth),
+            Math.min(front, capLength),
+            Math.min(back, capLength),
+        ];
+    }
+
+    envelopeWidth(): number {
+        return this.width + this.usableOverhang[0] + this.usableOverhang[1];
+    }
+
+    envelopeLength(): number {
+        return this.length + this.usableOverhang[2] + this.usableOverhang[3];
+    }
 }
 
 class PackedItem {

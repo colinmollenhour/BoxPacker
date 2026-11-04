@@ -160,8 +160,9 @@ final class AngledGeometry
     }
 
     /**
-     * Whether an item fits the box only when turned at an angle: no allowed orientation fits it square, but one
-     * turned about the vertical axis does. Items with placement callbacks are never angled.
+     * Whether an item fits the box only when turned at an angle: no allowed orientation fits it square (with the box's
+     * allowed overhang, if it has one), but one turned about the vertical axis does (on the box's own footprint, as
+     * angled items do not overhang). Items with placement callbacks are never angled.
      */
     public static function onlyFitsAngled(Item $item, Box $box): bool
     {
@@ -179,8 +180,9 @@ final class AngledGeometry
             Rotation::KeepFlat => [[$w, $l, $d], [$l, $w, $d]],
             Rotation::BestFit => [[$w, $l, $d], [$l, $w, $d], [$w, $d, $l], [$l, $d, $w], [$d, $w, $l], [$d, $l, $w]],
         };
+        $overhang = OverhangBounds::forBox($box);
         foreach ($orientations as [$ow, $ol, $oh]) {
-            if ($ow <= $width && $ol <= $length && $oh <= $depth) {
+            if ($oh <= $depth && ($overhang === null ? $ow <= $width && $ol <= $length : $overhang->fits($ow, $ol))) {
                 return false;
             }
         }

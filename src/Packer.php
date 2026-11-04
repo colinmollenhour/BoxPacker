@@ -236,8 +236,8 @@ class Packer implements LoggerAwareInterface
     }
 
     /**
-     * Thorough strategy only: the minimum fraction (0-1) of each item's base that must rest on the box floor or on
-     * other items, see {@see VolumePacker::setMinimumSupport()}.
+     * The minimum fraction (0-1) of each item's base that must rest on the box floor or on other items, see
+     * {@see VolumePacker::setMinimumSupport()}.
      */
     public function setMinimumSupport(float $fraction): void
     {
@@ -318,12 +318,13 @@ class Packer implements LoggerAwareInterface
         $packedBoxes->insertFromArray($thoroughPacker->pack($thoroughItems));
         $unpackedItems = $thoroughItems;
 
-        // keep the fast packer's boxes if they are better (and supported well enough), time permitting
+        // keep the fast packer's boxes if they are better (and supported well enough, and within the caps of any allowed
+        // overhang), time permitting
         if ($fastPacker !== null && !$volumePackerFactory->isOutOfTime()) {
             $fastBoxes = $fastPacker->doBasicPacking();
             $fastIsSupported = true;
             foreach ($fastBoxes as $fastBox) {
-                $fastIsSupported = $fastIsSupported && SupportCalculator::minimumSupport($fastBox->items) >= $this->minimumSupport;
+                $fastIsSupported = $fastIsSupported && OverhangBounds::packingIsLegal($fastBox->box, $fastBox->items) && SupportCalculator::minimumSupport($fastBox->items, $fastBox->box) >= $this->minimumSupport;
             }
             $unpackedDecider = $fastPacker->items->count() <=> $thoroughItems->count();
             if ($fastIsSupported && ($unpackedDecider < 0 || ($unpackedDecider === 0 && $thoroughPacker->compareSolutions($fastBoxes, $packedBoxes) < 0))) {
@@ -569,7 +570,8 @@ class Packer implements LoggerAwareInterface
         $otherBoxes = [];
         foreach ($this->boxes as $box) {
             if ($this->boxQuantitiesAvailable[$box] > 0) {
-                if ($box->getInnerWidth() * $box->getInnerLength() * $box->getInnerDepth() >= $itemVolume) {
+                // with an allowed overhang, the items can take up more than the box's own volume
+                if (OverhangBounds::capacityVolume($box) >= $itemVolume) {
                     $preferredBoxes[] = $box;
                 } elseif (!$enforceSingleBox) {
                     $otherBoxes[] = $box;
