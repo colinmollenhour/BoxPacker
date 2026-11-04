@@ -139,7 +139,9 @@ An overhanging item can have negative x or y, or end past the inner width or len
 ``ConstrainedPlacementItem::canBePacked()`` receives these same coordinates. A callback may refuse positions that
 hang over, for example to keep a product on the deck. The block search starts each block at the edge of the area its
 items may use, which hangs over. When a block of such an item is refused there, the search also offers the same
-block moved as far onto the deck as its free space allows, so the item can still be packed on the deck.
+block moved as far onto the deck as its free space allows, so the item can still be packed on the deck. Above the
+floor, blocks of items with callbacks are also tried in the part of a space over the deck. Items without callbacks are
+not: at full support they may not stack at the edges of a load that callbacks kept on the deck.
 
 Code that consumes :doc:`positional information<positional-information>` must handle both sides of the deck.
 

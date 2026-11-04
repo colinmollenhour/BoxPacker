@@ -55,8 +55,9 @@ v4.4.2 was withdrawn; this release replaces it.
 Fixes to v4.4.2:
 - Packing no longer fails with a `TypeError` when a box without an allowed overhang (or with a zero one) has an inner
   volume too large for an `int`. Such a box is used as it was in v4.4.1
-- The Thorough strategy, and the Fast strategy where it uses the block search, no longer fail with a `TypeError` when
-  the total volume of the items to pack is too large for an `int`
+- The block search no longer fails with a `TypeError` when the total volume of the items to pack is too large for an
+  `int`, so a box with an allowed overhang packs such an order under Fast, and `VolumePacker` under either strategy.
+  `Packer` under Thorough still rejects such an order, as it did in v4.4.1
 - In a box with an allowed overhang, an item whose `ConstrainedPlacementItem::canBePacked()` refuses positions that
   hang over the edge can now be packed on the deck. The block search started such items at positions that hang over
   and did not try them further in, so it could leave them all unpacked
