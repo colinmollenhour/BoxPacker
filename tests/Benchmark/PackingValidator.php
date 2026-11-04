@@ -40,7 +40,8 @@ use const PHP_INT_MIN;
  * the library's own helpers: an item may hang over an edge by no more than the edge's allowance (the sides allowance
  * at the left and right edges, the front and back one at the front and back edges) and no more than 15 % of its
  * extent across that edge, at any height; items at an angle stay within the box's footprint. So are the balance of a
- * packing that hangs over (see {@see centringProblems()}) and the move that balanced it (see {@see shiftProblems()}).
+ * packing that hangs over (see {@see centringProblems()}), whether it hangs over where its load would fit the deck (see
+ * {@see avoidableOverhangProblems()}), and the moves that put it there (see {@see shiftProblems()}).
  */
 final class PackingValidator
 {
@@ -139,16 +140,79 @@ final class PackingValidator
     }
 
     /**
-     * How a packing in a box with an allowed overhang was moved to balance it other than as the rule says, given where
-     * its items were before the move (matched to the packed items by their Item objects). Every item with a volume must
-     * have moved by the same amount; items with no volume are placed after the move, so are left out. The move along
-     * each axis is worked out here from the items before it alone: none on an axis on which nothing hangs over an edge
-     * (a gap counting as a negative overhang); else half the difference of the two overhangs, rounded towards zero (so
-     * of two equally good moves, the smaller), but no further than keeps every item within its limits at both edges
-     * (an item at an angle within the box). A load already beyond those limits before the move is reported as such,
-     * and should not have been moved on that axis. Without an allowed overhang (or with a zero one), nothing can hang
-     * over, so no move is right. Not to be used for a packing that kept its position because a placement callback
-     * refused a balanced one.
+     * How a packing in a box with an allowed overhang hangs over an edge though it need not: on an axis along which the
+     * load (the items with a volume) hangs over either edge, though its items' extents along that axis (by their
+     * bounding boxes, at any height) come to no more than the deck's span there, counting the stretches that several
+     * items share once. Closing the gaps between them along that axis would then leave the load wholly on the deck
+     * along it, with every item's support and every item's place relative to the others along the other axes kept.
+     * Not to be used for a packing that kept its position because a placement callback refused a moved one.
+     *
+     * @return list<string> problems found (empty = no avoidable overhang)
+     */
+    public static function avoidableOverhangProblems(PackedBox $packedBox): array
+    {
+        $box = $packedBox->box;
+        $allowance = self::allowance($box);
+        if ($allowance === null) {
+            return [];
+        }
+        $load = [];
+        foreach ($packedBox->items as $item) {
+            if ($item->width * $item->length * $item->depth > 0) {
+                $load[] = $item;
+            }
+        }
+        if ($load === []) {
+            return [];
+        }
+
+        $problems = [];
+        foreach (self::axes($box->getInnerWidth(), $box->getInnerLength(), $allowance) as $axis => [$span, , $extents]) {
+            $intervals = [];
+            foreach ($load as $item) {
+                [$position, $extent] = $extents($item);
+                $intervals[] = [$position, $position + $extent];
+            }
+            sort($intervals);
+            $low = $intervals[0][0];
+            $high = PHP_INT_MIN;
+            $union = 0;
+            $end = PHP_INT_MIN;
+            foreach ($intervals as [$start, $intervalEnd]) {
+                if ($start > $end) {
+                    $union += $intervalEnd - $start;
+                } elseif ($intervalEnd > $end) {
+                    $union += $intervalEnd - $end;
+                }
+                $end = max($end, $intervalEnd);
+                $high = max($high, $intervalEnd);
+            }
+            if (($low < 0 || $high > $span) && $union <= $span) {
+                $problems[] = 'the load hangs over ' . (-$low) . ' and ' . ($high - $span) . " along {$axis}, though its items' extents along it come to {$union}, which fits the deck's {$span}";
+            }
+        }
+
+        return $problems;
+    }
+
+    /**
+     * How a packing in a box with an allowed overhang was moved to keep it on the deck and balance it other than as
+     * the rule says, given where its items were before the move (matched to the packed items by their Item objects).
+     * Items with no volume are placed after the move, so are left out. The move of each item along each axis is worked
+     * out here from the items before it alone:
+     *
+     * - none on an axis on which nothing hangs over an edge (a gap counting as a negative overhang);
+     * - else, balancing the load as it is: half the difference of the two overhangs, rounded towards zero (so of two
+     *   equally good moves, the smaller), but no further than keeps every item within its limits at both edges (an item
+     *   at an angle within the box), every item moving by that;
+     * - but if the load would still hang over an edge after that, and closing the gaps along the axis between the
+     *   stretches the items cover (items that overlap or touch along it covering one stretch) and then balancing the
+     *   closed load in the same way would leave the larger of its two overhangs smaller, that: each item moves by the
+     *   total length of the gaps before its stretch back towards the low edge, then by the closed load's balancing move.
+     *
+     * A load already beyond its limits before the move is reported as such, and should not have been moved on that
+     * axis. Without an allowed overhang (or with a zero one), nothing can hang over, so no move is right. Not to be
+     * used for a packing that kept its position because a placement callback refused a moved one.
      *
      * @param  iterable<PackedItem> $before
      * @return list<string>         problems found (empty = moved as it should have been, or not moved if it should not)
@@ -171,9 +235,9 @@ final class PackingValidator
             }
         }
 
-        // an Item object may be packed more than once: a move keeps the order of its placements by position, so pair
-        // them up in that order
-        $problems = $moves = [];
+        // an Item object may be packed more than once: a move keeps the order of its placements by position (closing a
+        // gap keeps the stretches in order, and the items in one stretch move together), so pair them up in that order
+        $problems = $pairs = [];
         foreach ($is + $was as $id => $placements) {
             $wasPlaced = self::byPosition($was[$id] ?? []);
             $isPlaced = self::byPosition($is[$id] ?? []);
@@ -189,38 +253,54 @@ final class PackingValidator
                 if ([$b->z, $b->width, $b->length, $b->depth, $b->angle] !== [$a->z, $a->width, $a->length, $a->depth, $a->angle]) {
                     $problems[] = "{$description} was changed other than by moving it across the floor";
                 }
-                $move = [$b->x - $a->x, $b->y - $a->y];
-                $moves["{$move[0]},{$move[1]}"] = $move;
+                $pairs[] = [$a, [$b->x - $a->x, $b->y - $a->y]];
             }
         }
-        if ($moves === []) {
-            return $problems;
-        }
-        if (count($moves) > 1) {
-            $problems[] = 'items were moved by different amounts: ' . implode(' and ', array_keys($moves));
-
+        if ($pairs === []) {
             return $problems;
         }
 
+        // the move each item should have had, by axis
         $expected = [];
         foreach (self::axes($box->getInnerWidth(), $box->getInnerLength(), $allowance) as $axis => [$span, $axisAllowance, $extents]) {
             [$overhangBefore, $overhangAfter, $lowest, $highest] = self::reach($load, $span, $axisAllowance, $extents);
-            if ($overhangBefore <= 0 && $overhangAfter <= 0) {
-                $expected[] = 0; // nothing hangs over on this axis
-                continue;
-            }
-            if ($lowest > 0 || $highest < 0) {
+            if (($overhangBefore > 0 || $overhangAfter > 0) && ($lowest > 0 || $highest < 0)) {
                 $problems[] = "the load was beyond its limits along {$axis} before the move";
-                $expected[] = 0; // a packing that breaks its limits is never moved
+                // a packing that breaks its limits is never moved
+                foreach ($load as $item) {
+                    $expected[$axis][spl_object_id($item)] = 0;
+                }
                 continue;
             }
-            $difference = $overhangBefore - $overhangAfter;
-            $half = (int) (($difference - $difference % 2) / 2); // % takes the sign of the difference: rounded towards 0
-            $expected[] = max($lowest, min($highest, $half));
+            $expected[$axis] = self::expectedMoves($load, $span, $axisAllowance, $extents, $axis);
         }
-        $move = reset($moves);
-        if ($move !== $expected) {
-            $problems[] = "the load was moved by {$move[0]},{$move[1]}, but should have been moved by {$expected[0]},{$expected[1]}";
+
+        $moves = $expectedMoves = [];
+        foreach ($pairs as [$a, $move]) {
+            $moves["{$move[0]},{$move[1]}"] = $move;
+            $should = [$expected['x'][spl_object_id($a)], $expected['y'][spl_object_id($a)]];
+            $expectedMoves["{$should[0]},{$should[1]}"] = $should;
+        }
+        if (count($expectedMoves) === 1) {
+            // every item should have moved by the same amount
+            if (count($moves) > 1) {
+                $problems[] = 'items were moved by different amounts: ' . implode(' and ', array_keys($moves));
+
+                return $problems;
+            }
+            $move = reset($moves);
+            $should = reset($expectedMoves);
+            if ($move !== $should) {
+                $problems[] = "the load was moved by {$move[0]},{$move[1]}, but should have been moved by {$should[0]},{$should[1]}";
+            }
+
+            return $problems;
+        }
+        foreach ($pairs as [$a, $move]) {
+            $should = [$expected['x'][spl_object_id($a)], $expected['y'][spl_object_id($a)]];
+            if ($move !== $should) {
+                $problems[] = "{$a->item->getDescription()} at {$a->x},{$a->y},{$a->z} was moved by {$move[0]},{$move[1]}, but should have been moved by {$should[0]},{$should[1]}";
+            }
         }
 
         return $problems;
@@ -324,6 +404,81 @@ final class PackingValidator
         }
 
         return $problems;
+    }
+
+    /**
+     * The move along an axis that the rule gives each item of a load (see {@see shiftProblems()}), by the PackedItem's
+     * object id.
+     *
+     * @param  non-empty-list<PackedItem>                          $load
+     * @param  callable(PackedItem): array{0: int, 1: int, 2: int} $extents
+     * @return array<int, int>
+     */
+    private static function expectedMoves(array $load, int $span, int $axisAllowance, callable $extents, string $axis): array
+    {
+        $moves = [];
+        [$overhangBefore, $overhangAfter, $lowest, $highest] = self::reach($load, $span, $axisAllowance, $extents);
+        $balance = self::balancingMove($overhangBefore, $overhangAfter, $lowest, $highest);
+        foreach ($load as $item) {
+            $moves[spl_object_id($item)] = $balance;
+        }
+        $larger = max($overhangBefore - $balance, $overhangAfter + $balance);
+        if ($larger <= 0) {
+            return $moves;
+        }
+
+        // the stretches the items cover along the axis, and how far closing the gaps before each moves its items
+        $starts = [];
+        foreach ($load as $index => $item) {
+            $starts[] = [$extents($item)[0], $index];
+        }
+        sort($starts);
+        $closing = [];
+        $gaps = 0;
+        $end = null;
+        foreach ($starts as [$start, $index]) {
+            [, $extent] = $extents($load[$index]);
+            if ($end !== null && $start > $end) {
+                $gaps += $start - $end;
+            }
+            $end = $end === null ? $start + $extent : max($end, $start + $extent);
+            $closing[$index] = $gaps;
+        }
+        if ($gaps === 0) {
+            return $moves;
+        }
+        $closed = [];
+        foreach ($load as $index => $item) {
+            $closed[] = $axis === 'x'
+                ? new PackedItem($item->item, $item->x - $closing[$index], $item->y, $item->z, $item->width, $item->length, $item->depth, $item->angle)
+                : new PackedItem($item->item, $item->x, $item->y - $closing[$index], $item->z, $item->width, $item->length, $item->depth, $item->angle);
+        }
+        [$closedBefore, $closedAfter, $closedLowest, $closedHighest] = self::reach($closed, $span, $axisAllowance, $extents);
+        $closedBalance = self::balancingMove($closedBefore, $closedAfter, $closedLowest, $closedHighest);
+        if (max($closedBefore - $closedBalance, $closedAfter + $closedBalance) >= $larger) {
+            return $moves;
+        }
+        foreach ($load as $index => $item) {
+            $moves[spl_object_id($item)] = $closedBalance - $closing[$index];
+        }
+
+        return $moves;
+    }
+
+    /**
+     * The move that balances a load hanging over the low and the high edge of an axis by these amounts (negative: a
+     * gap), given the most negative and most positive moves that keep every item within its limits: none if it hangs
+     * over neither, else half the difference, rounded towards zero, as far as the limits allow.
+     */
+    private static function balancingMove(int $overhangBefore, int $overhangAfter, int $lowest, int $highest): int
+    {
+        if ($overhangBefore <= 0 && $overhangAfter <= 0) {
+            return 0;
+        }
+        $difference = $overhangBefore - $overhangAfter;
+        $half = (int) (($difference - $difference % 2) / 2); // % takes the sign of the difference: rounded towards 0
+
+        return max($lowest, min($highest, $half));
     }
 
     /**

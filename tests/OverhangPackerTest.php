@@ -81,6 +81,7 @@ class OverhangPackerTest extends TestCase
         foreach ($packedBoxes as $packedBox) {
             self::assertSame([], PackingValidator::problems($packedBox));
             self::assertSame([], PackingValidator::centringProblems($packedBox));
+            self::assertSame([], PackingValidator::avoidableOverhangProblems($packedBox));
             self::assertGreaterThanOrEqual(1.0, PackingValidator::minimumSupport($packedBox));
             $summary[] = "{$packedBox->box->getReference()}: {$packedBox->items->count()}";
         }

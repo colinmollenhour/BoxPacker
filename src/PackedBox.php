@@ -70,7 +70,8 @@ readonly class PackedBox implements JsonSerializable
     /**
      * Get remaining width inside box for another item: inner width less used width (negative if items hang over the
      * sides of a box with an allowed overhang by more than is left). For a load that a box with an allowed overhang has
-     * moved off x = 0 to balance its overhang, the gap at the left counts as used, so this is only the gap at the right.
+     * moved off x = 0 to balance its overhang (or to keep it on the deck), the gap at the left counts as used, so this
+     * is only the gap at the right.
      */
     public function getRemainingWidth(): int
     {
@@ -78,9 +79,9 @@ readonly class PackedBox implements JsonSerializable
     }
 
     /**
-     * Get remaining length inside box for another item: inner length less used length (negative if items hang over
-     * the front or back of a box with an allowed overhang by more than is left). As with the width, for a load moved to
-     * balance its overhang this is only the gap at the back.
+     * Get remaining length inside box for another item: inner length less used length (negative if items hang over the
+     * front or back of a box with an allowed overhang by more than is left). As with the width, for a load moved to
+     * balance its overhang (or to keep it on the deck) this is only the gap at the back.
      */
     public function getRemainingLength(): int
     {
@@ -98,7 +99,7 @@ readonly class PackedBox implements JsonSerializable
     /**
      * Used width inside box for packing items: from x = 0 (or the leftmost item, if it hangs over the left side of a
      * box with an allowed overhang) to the rightmost item. A load that a box with an allowed overhang has moved off
-     * x = 0 to balance its overhang counts the gap at the left as used.
+     * x = 0 to balance its overhang (or to keep it on the deck) counts the gap at the left as used.
      */
     public function getUsedWidth(): int
     {
