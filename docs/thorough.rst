@@ -56,7 +56,9 @@ tried instead. A space where every block was refused is set aside, and offered a
 fill, in case a callback that depends on what is already in the box now accepts.
 
 For boxes with :doc:`allowed overhang<overhang>`, the search uses the wider envelope and applies each item's
-per-edge cap at every height; volume utilisation and default cost still use the real deck.
+per-edge cap at every height; volume utilisation and default cost still use the real deck. After the search, a
+load hanging over an edge is moved as a whole to balance its overhang within those caps, subject to placement
+callbacks accepting the new positions.
 
 Choosing the boxes
 ------------------

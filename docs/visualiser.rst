@@ -17,7 +17,9 @@ Visualiser
 
     For boxes with :doc:`allowed overhang<overhang>`, the visualiser draws the real deck outline and a dashed amber
     envelope outline, and spaces boxes using the envelope so overhanging items stay in view. Each edge of the envelope
-    is drawn only as far as the box's packed items could hang over it.
+    is drawn only as far as the box's packed items could hang over it. Generated URLs repeat each of the two allowances
+    at its two edges in the sixth box element, ``[sides, sides, frontAndBack, frontAndBack]``; the visualiser still reads
+    any four-value URL.
 
 .. raw:: html
 

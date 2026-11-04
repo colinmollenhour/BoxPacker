@@ -3,20 +3,34 @@
 ## [4.5.0] - Unreleased
 ### Added
 - Opt-in allowed overhang for pallets: a box implementing the new `OverhangBox` interface returns an `AllowedOverhang`
-  value object with left, right, front and back allowances
+  value object with two symmetric allowances, `sides` and `frontAndBack`, each applying at each of its two edges.
+  Both default to zero; negative values throw `InvalidArgumentException` and more than two arguments throw
+  `ArgumentCountError` (the four-edge constructor form was removed)
 - Each item may hang over an edge by at most the smaller of the allowance and 15% of its own extent across that edge,
-  at every height. Thorough searches the envelope within those caps; Fast also runs a greedy block search that uses
-  them and keeps whichever of that and its usual packing on the deck uses more volume. Utilisation, the default cost
-  and the default box order stay based on the real deck
-- Packed-box JSON includes `box.allowedOverhang`, and visualiser URLs an optional `[left, right, front, back]` tuple,
-  when the allowance is non-zero; the visualiser draws the deck and the envelope
+  rounded down, at every height. Thorough searches the envelope within those caps; Fast also runs a greedy block
+  search that uses them and keeps whichever of that and its usual packing on the deck uses more volume.
+  Utilisation, the default cost and the default box order stay based on the real deck
+- Packed-box JSON includes `box.allowedOverhang` as `{"sides": 150, "frontAndBack": 300}`, and visualiser URLs include
+  an optional sixth box element `[sides, sides, frontAndBack, frontAndBack]`, when the allowance is non-zero.
+  The visualiser draws the deck and the envelope and still reads any four-value URL
 
 ### Changed
 - For a box with a non-zero allowed overhang only:
   - `PackedItem` x and y (and the positions proposed to `ConstrainedPlacementItem::canBePacked()`) can be negative or
     end past the inner width or length
-  - `getUsedWidth()` and `getUsedLength()` include the overhang, so `getRemainingWidth()` and `getRemainingLength()`
-    can be negative; as the items can take up more than the inner volume, `getUnusedVolume()` can be negative too and
+  - After packing, the whole load is moved on each axis on which it hangs over an edge to minimise its larger
+    overhang, counting gaps as negative overhang and choosing the smaller move on a tie. Every item stays within
+    its caps, and angled items stay on the deck. This balances overhang, not the centre of gravity, and cannot close
+    gaps inside the load. A deck-fitting load found overhanging can end up centred on the deck; Fast's layer packing
+    stays in its original position
+  - When the load moves, placement callbacks are asked again once at the proposed final positions, with only their
+    already-moved predecessors as context. On the first refusal, the whole load keeps the position the search found.
+    Exceptions propagate out of `pack()`; these extra calls do not use up the search budget
+  - Items with a zero width, length or depth are placed after the load and do not affect its centring: each stays at
+    (0, 0) if it fits the deck, or is centred on its own within its caps if it needs overhang
+  - `getUsedWidth()` and `getUsedLength()` include the overhang and any gap before a centred load, so
+    `getRemainingWidth()` and `getRemainingLength()` can be negative; for a load centred onto the deck they measure
+    only the far gap. As items can take up more than the inner volume, `getUnusedVolume()` can be negative too and
     volume utilisation can exceed 100%
   - `setMinimumSupport()` also applies to the Fast strategy's block search
 
