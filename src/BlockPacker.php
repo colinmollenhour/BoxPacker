@@ -1782,7 +1782,9 @@ class BlockPacker implements LoggerAwareInterface
      * The packed box of a finished search. With an allowed overhang, the packing is first moved to keep it on the deck
      * as far as it fits there and to balance its overhang, as far as the items' placement callbacks accept: with the
      * gaps in the load closed where that lessens its overhang (see {@see OverhangBounds::closingMoves()}), else moved
-     * as a whole (see {@see OverhangBounds::centringShift()}), else as found.
+     * as a whole (see {@see OverhangBounds::centringShift()}), else as found. If the load with its gaps closed leaves
+     * out an item with no volume that has a placement callback, the load moved as a whole is also tried (and its items
+     * asked about it), and is kept instead if more of those items are then placed.
      */
     private function materialise(BlockSearchState $state): PackedBox
     {
@@ -1797,31 +1799,32 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         $closed = $this->closed($state);
-        $constrainedFlats = false;
-        foreach ($this->flatItems as $item) {
-            $constrainedFlats = $constrainedFlats || $item instanceof ConstrainedPlacementItem;
-        }
-        if ($closed !== null && !$constrainedFlats) {
-            $this->logger->debug('Overhang finalised', ['stage' => 'gaps closed']);
-
-            return $this->withFlatItems($state, $closed);
-        }
-
-        $centred = $this->centred($state, $list);
-        $stage = $centred === $list ? 'as found' : 'balanced';
         if ($closed === null) {
-            $this->logger->debug('Overhang finalised', ['stage' => $stage]);
+            $centred = $this->centred($state, $list);
+            $this->logger->debug('Overhang finalised', ['stage' => $centred === $list ? 'as found' : 'balanced']);
 
             return $this->withFlatItems($state, $centred);
         }
 
         // closing the gaps moves the load the flat items are placed against, so must not leave fewer of them placed
-        // than without it
+        // than without it. Only a placement callback makes where they go depend on the load, so the load moved as a
+        // whole is only tried if one of them was left out
+        $loadCount = $closed->count();
         $withGapsClosed = $this->withFlatItems($state, $closed);
+        $constrainedFlats = false;
+        foreach ($this->flatItems as $item) {
+            $constrainedFlats = $constrainedFlats || $item instanceof ConstrainedPlacementItem;
+        }
+        if (!$constrainedFlats || $withGapsClosed->items->count() === $loadCount + count($this->flatItems)) {
+            $this->logger->debug('Overhang finalised', ['stage' => 'gaps closed']);
+
+            return $withGapsClosed;
+        }
+        $centred = $this->centred($state, $list, true);
         $without = $this->withFlatItems($state, $centred);
         if ($withGapsClosed->items->count() < $without->items->count()) {
             $this->logger->debug('Overhang gaps not closed: fewer flat items would be placed', ['withGapsClosed' => $withGapsClosed->items->count(), 'without' => $without->items->count()]);
-            $this->logger->debug('Overhang finalised', ['stage' => $stage]);
+            $this->logger->debug('Overhang finalised', ['stage' => $centred === $list ? 'as found' : 'balanced']);
 
             return $without;
         }
@@ -1925,9 +1928,10 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * The items of a finished search (as placed, in $list) moved to balance their overhang, or as placed if they need no
-     * move or a placement callback refuses an item's new position.
+     * move or a placement callback refuses an item's new position. $forComparison: only to compare with the load with
+     * its gaps closed (as the logs say), not as the outcome.
      */
-    private function centred(BlockSearchState $state, PackedItemList $list): PackedItemList
+    private function centred(BlockSearchState $state, PackedItemList $list, bool $forComparison = false): PackedItemList
     {
         assert($this->overhang !== null);
         // measured on a copy: iterating a PackedItemList sorts it, and the list returned keeps the order of placement
@@ -1937,12 +1941,13 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         $shifted = $this->moved($state, array_fill(0, count($state->placements), [$shiftX, $shiftY]));
+        $purpose = $forComparison ? ', for comparison with the gaps closed' : '';
         if ($shifted === null) {
-            $this->logger->debug('Overhang not balanced: a placement callback refused an item\'s balanced position', ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
+            $this->logger->debug("Overhang not balanced{$purpose}: a placement callback refused an item's balanced position", ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
 
             return $list;
         }
-        $this->logger->debug('Overhang balanced', ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
+        $this->logger->debug("Overhang balanced{$purpose}", ['shiftX' => $shiftX, 'shiftY' => $shiftY]);
 
         return $shifted;
     }

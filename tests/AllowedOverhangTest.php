@@ -405,8 +405,9 @@ class AllowedOverhangTest extends TestCase
             // one part along each axis: moved as centringShift() moves it
             'no gaps' => [[[[-150, 0, 1150, 1000]]], [[75], [0]], [0, 0], [false, false]],
             'touching' => [[[[-100, 0, 700, 500]], [[600, 0, 400, 500]]], [[50, 50], [0, 0]], [0, 0], [false, false]],
-            // 600 (cap 90) at its cap at the left and 480 (cap 72) 70 over the right: the caps let the whole load move
-            // only 2, leaving 88 over the left; with the gap of 82 closed, it can move 50, leaving 40 over each side
+            // 600 (cap 90) at its cap at the left and 480 (cap 72) at its cap at the right: the caps do not let the
+            // whole load move, leaving 90 over the left; with the gap of 82 closed, it can move 50, leaving 40 over
+            // each side
             'closed, still hanging over' => [[[[-90, 0, 600, 500]], [[592, 0, 480, 500]]], [[50, -32], [0, 0]], [82, 0], [true, false]],
             // 600 (cap 90) at its cap at the front and 300 behind it with a gap of 130: balanced as found, 15 over each
             // end; closed, wholly on the deck, with gaps of 50 at the front and the back

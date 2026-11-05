@@ -25,10 +25,12 @@ use Psr\Log\LoggerInterface;
 use Stringable;
 
 use function array_column;
+use function array_diff;
 use function array_filter;
 use function array_map;
 use function array_search;
 use function array_slice;
+use function array_unique;
 use function count;
 use function in_array;
 use function ini_get;
@@ -263,11 +265,11 @@ class OverhangPackingTest extends TestCase
             'none' => [null, 10, 10, 10],
             '1.5 / 3' => [new AllowedOverhang(sides: 150, frontAndBack: 300), 16, 16, 16],
             '1 / 3' => [new AllowedOverhang(sides: 100, frontAndBack: 300), 16, 16, 16],
-            // Thorough mixes orientations where a uniform grid cannot: 8 flat (4953 × 2252 × 756) and beside them 2 × 2 on
-            // their long edges (4953 × 756 × 2252), so 12, wholly on the deck front to back (see
+            // Thorough mixes orientations where a uniform grid cannot: 8 flat (4953 × 2252 × 756) and beside them 2 × 2
+            // on their long edges (4953 × 756 × 2252), so 12, wholly on the deck front to back (see
             // testAcmeTrampolinesThoroughMixesOrientations()). Each item is within its caps (the validator checks every
-            // one) and fully supported. The table's 10 is the best uniform grid; Fast keeps the layer packer's 10 on the
-            // deck, as the greedy block search finds no more
+            // one) and fully supported. The table's 10 is the best uniform grid; Fast keeps the layer packer's 10 on
+            // the deck, as the greedy block search finds no more
             '2.5 / 2.5' => [new AllowedOverhang(sides: 250, frontAndBack: 250), 10, 12, 10],
         ];
     }
@@ -354,11 +356,11 @@ class OverhangPackingTest extends TestCase
         [$packedBox, $before] = self::packNotingWhereTheSearchPlacedIt(self::thorough(...), self::pallet(new AllowedOverhang(sides: 250, frontAndBack: 250)), self::trampolines(24, true));
 
         self::assertValid($packedBox);
-        // the search builds it from the corner of its frame: 8 flat, hanging the whole 2.5" over the left and the front,
-        // and 2 rows of 2 on their long edges anchored at the back, the back row hanging 1.13" (its cap, 15 % of 7.56")
-        // over the back edge, with a gap of 5.99" between the two blocks. Moving the whole load could not help along y
-        // (the flat ones are at their cap at the front and the back row at its cap at the back), but the load is only
-        // 37.64" (22.52" + 2 × 7.56") from front to back
+        // the search builds it from the corner of its frame: 8 flat, hanging the whole 2.5" over the left and the
+        // front, and 2 rows of 2 on their long edges anchored at the back, the back row hanging 1.13" (its cap, 15 % of
+        // 7.56") over the back edge, with a gap of 5.99" between the two blocks. Moving the whole load could not help
+        // along y (the flat ones are at their cap at the front and the back row at its cap at the back), but the load
+        // is only 37.64" (22.52" + 2 × 7.56") from front to back
         $flat = $onEdge = [];
         foreach ([0, 756, 1512, 2268, 3024, 3780, 4536, 5292] as $z) {
             $flat[] = "ACME Trampolines -250,-250,{$z} 4953x2252x756";
@@ -371,8 +373,8 @@ class OverhangPackingTest extends TestCase
         self::assertSame($expected, self::describe($before));
         self::assertSame([-250, 4703, -250, 4113], self::extents($before));
         // so the gap is closed, moving the rows on their edges 5.99" forward against the flat ones, and the closed load
-        // balanced: along x as the 16 are (0.77" and 0.76" over the sides), along y onto the deck, with gaps of 1.18" at
-        // the front and 1.18" at the back
+        // balanced: along x as the 16 are (0.77" and 0.76" over the sides), along y onto the deck, with gaps of 1.18"
+        // at the front and 1.18" at the back
         self::assertSame([], PackingValidator::shiftProblems($before, $packedBox));
         $flat = $onEdge = [];
         foreach ([0, 756, 1512, 2268, 3024, 3780, 4536, 5292] as $z) {
@@ -986,19 +988,64 @@ class OverhangPackingTest extends TestCase
         $replay = array_slice($trampoline->calls, $log->calls);
         self::assertCount(12, $replay);
         self::assertSame(self::mixedTwelve()[0], self::describe(array_map(static fn (array $call): PackedItem => new PackedItem($trampoline, ...$call['proposal']), $replay)));
-        // each with the cartons asked before it in the box, where they are finally placed
-        foreach ($replay as $index => $call) {
-            self::assertCount($index, $call['context']);
-        }
+        // each with exactly the cartons asked before it in the box, in the order they were placed, where they are
+        // finally placed
+        self::assertAskedWithThoseBefore($replay);
+        self::assertSame($log->placements, $blockPacker->getPlacements());
+    }
+
+    public function testARefusalLaterInTheClosedReplayStopsItThere(): void
+    {
+        // the callback refuses the second carton on its long edge (the tenth asked) where closing the gap puts it: the
+        // nine before it, flat ones and one on its edge, are asked at their closed positions, each with those before
+        // it in the box there; no later carton is asked with the gap closed, and the load is then moved as a whole,
+        // every carton asked again there
+        $refused = [-77, 3126, 0, 4953, 756, 2252];
+        [$blockPacker, $trampoline, $log] = self::constrainedTrampolines(static fn (array $proposal): bool => $proposal === $refused);
+        $packedBox = $blockPacker->pack();
+
+        self::assertCount(12, $packedBox->items);
+        self::assertValid($packedBox, balanced: false);
+        self::assertSame([], PackingValidator::centringProblems($packedBox));
+        self::assertSame('balanced', $log->stage);
+        self::assertSame(self::mixedTwelve()[1], self::placements($packedBox));
+
+        $replay = array_slice($trampoline->calls, $log->calls);
+        self::assertCount(10 + 12, $replay);
+        [$closed, $asAWhole] = [array_slice($replay, 0, 10), array_slice($replay, 10)];
+        $describe = static fn (array $calls): array => self::describe(array_map(static fn (array $call): PackedItem => new PackedItem($trampoline, ...$call['proposal']), $calls));
+        self::assertSame($refused, $closed[9]['proposal']);
+        self::assertCount(10, array_unique($describe($closed)));
+        self::assertSame([], array_diff($describe($closed), self::mixedTwelve()[0]));
+        self::assertAskedWithThoseBefore($closed);
+        self::assertSame(self::mixedTwelve()[1], $describe($asAWhole));
+        self::assertAskedWithThoseBefore($asAWhole);
         self::assertSame($log->placements, $blockPacker->getPlacements());
     }
 
     /**
-     * The mixed 12 (see testAcmeTrampolinesThoroughMixesOrientations()), for the block search alone, with a sheet with
-     * no volume that its placement callback places only if $accepts says the cartons already in the box allow.
+     * Each of these calls of a placement callback (see {@see ConstrainedPlacementRecordingTestItem::$calls}) was made
+     * with exactly the items of the calls before it in the box, in that order, where those calls proposed them.
      *
-     * @param  Closure(list<PackedItem>): bool $accepts
-     * @return array{0: PackedBox, 1: ?string}
+     * @param list<array{proposal: array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}, context: list<PackedItem>}> $calls
+     */
+    private static function assertAskedWithThoseBefore(array $calls): void
+    {
+        $proposals = array_column($calls, 'proposal');
+        foreach ($calls as $index => $call) {
+            $context = array_map(static fn (PackedItem $item): array => [$item->x, $item->y, $item->z, $item->width, $item->length, $item->depth], $call['context']);
+            self::assertSame(array_slice($proposals, 0, $index), $context, "the items in the box when call {$index} was made");
+        }
+    }
+
+    /**
+     * The mixed 12 (see testAcmeTrampolinesThoroughMixesOrientations()), for the block search alone, with a sheet with
+     * no volume that its placement callback places only if $accepts says the cartons already in the box allow. Returned
+     * with the stage the packing was finalised at, the overhang messages logged, and the y of every carton in the box
+     * each time the sheet was asked.
+     *
+     * @param  Closure(list<PackedItem>): bool                                      $accepts
+     * @return array{0: PackedBox, 1: ?string, 2: list<string>, 3: list<list<int>>}
      */
     private static function trampolinesWithASheet(Closure $accepts): array
     {
@@ -1008,9 +1055,17 @@ class OverhangPackingTest extends TestCase
                 parent::__construct($description, $width, $length, $depth, $weight, $allowedRotation);
             }
 
+            /**
+             * @var list<list<int>>
+             */
+            public array $asked = [];
+
             public function canBePacked(PackedBox $packedBox, int $proposedX, int $proposedY, int $proposedZ, int $width, int $length, int $depth): bool
             {
-                return ($this->accepts)(iterator_to_array($packedBox->items, false));
+                $context = iterator_to_array($packedBox->items, false);
+                $this->asked[] = array_map(static fn (PackedItem $item): int => $item->y, $context);
+
+                return ($this->accepts)($context);
             }
         };
         $items = self::trampolines(24);
@@ -1021,10 +1076,18 @@ class OverhangPackingTest extends TestCase
             public ?string $stage = null;
 
             /**
+             * @var list<string>
+             */
+            public array $messages = [];
+
+            /**
              * @param mixed[] $context
              */
             public function log($level, string|Stringable $message, array $context = []): void
             {
+                if (str_starts_with((string) $message, 'Overhang ')) {
+                    $this->messages[] = (string) $message;
+                }
                 if ($message === 'Overhang finalised') {
                     $this->stage = $context['stage'];
                 }
@@ -1033,46 +1096,58 @@ class OverhangPackingTest extends TestCase
         $blockPacker->setLogger($logger);
         $packedBox = $blockPacker->pack();
 
-        return [$packedBox, $logger->stage];
+        return [$packedBox, $logger->stage, $logger->messages, $sheet->asked];
     }
 
     public function testClosingTheGapsNeverPlacesFewerFlatItems(): void
     {
         // the sheet refuses to go in with the cartons where closing the gap puts them, but not where moving the load as
         // a whole does: so the load is moved as a whole, and the sheet placed
-        [$packedBox, $stage] = self::trampolinesWithASheet(static fn (array $context): bool => !in_array(118, array_map(static fn (PackedItem $item): int => $item->y, $context), true));
+        [$packedBox, $stage, $messages] = self::trampolinesWithASheet(static fn (array $context): bool => !in_array(118, array_map(static fn (PackedItem $item): int => $item->y, $context), true));
 
         self::assertCount(13, $packedBox->items);
         self::assertSame('balanced', $stage);
         self::assertSame(self::mixedTwelve()[1], self::placements($packedBox, ['Sheet']));
         self::assertValid($packedBox, balanced: false);
         self::assertSame([], PackingValidator::centringProblems($packedBox));
+        // the load moved as a whole was only tried for the comparison, which the logs say
+        $compared = ['Overhang gaps', 'Overhang gaps closed', 'Overhang balanced, for comparison with the gaps closed'];
+        self::assertSame([...$compared, 'Overhang gaps not closed: fewer flat items would be placed', 'Overhang finalised'], $messages);
 
-        // where it accepts both, the gap is closed
-        [$packedBox, $stage] = self::trampolinesWithASheet(static fn (array $context): bool => true);
+        // where it accepts both, the gap is closed: as the sheet is placed against the closed load, the load moved as a
+        // whole is not tried, and the sheet is only ever asked with the cartons where closing the gap puts them (or in
+        // the empty box, which is how its orientations are chosen)
+        [$packedBox, $stage, $messages, $asked] = self::trampolinesWithASheet(static fn (array $context): bool => true);
         self::assertCount(13, $packedBox->items);
         self::assertSame('gaps closed', $stage);
         self::assertSame(self::mixedTwelve()[0], self::placements($packedBox, ['Sheet']));
         self::assertValid($packedBox);
+        self::assertSame(['Overhang gaps', 'Overhang gaps closed', 'Overhang finalised'], $messages);
+        self::assertNotSame([], array_filter($asked), 'the sheet was never asked with the cartons in the box');
+        foreach ($asked as $ys) {
+            self::assertTrue($ys === [] || in_array(118, $ys, true), 'the sheet was asked with the load moved as a whole');
+        }
 
         // and where it refuses both, the gap is closed too, the sheet left out either way
-        [$packedBox, $stage] = self::trampolinesWithASheet(static fn (array $context): bool => false);
+        [$packedBox, $stage, $messages] = self::trampolinesWithASheet(static fn (array $context): bool => false);
         self::assertCount(12, $packedBox->items);
         self::assertSame('gaps closed', $stage);
         self::assertSame(self::mixedTwelve()[0], self::placements($packedBox));
+        self::assertSame([...$compared, 'Overhang finalised'], $messages);
     }
 
     public function testStacksOnBothSidesOfAGapKeepTheirSupport(): void
     {
-        // as in testBlocksAreAnchoredAtAllFourCornersWithinTheirCaps(), but two of each, so a row of two in front and
-        // one behind, each with another row on top, with a gap of 116 between front and back: closing it moves each
-        // stack whole, so every upper item stays fully supported
+        // as in testBlocksAreAnchoredAtAllFourCornersWithinTheirCaps() (the plank widening the search frame to 195 at
+        // each edge, as it can go in the box, though not with all eight, as it would take the box over its weight
+        // limit), but two of each, so a row of two in front and one behind, each with another row on top, with a gap
+        // of 116 between front and back: closing it moves each stack whole, so every upper item stays fully supported
         $box = self::pallet(new AllowedOverhang(sides: 200, frontAndBack: 300), 1000, 1000, 200, 100);
         $items = new ItemList();
         foreach ([1, 2, 3, 4] as $weight) {
             $items->insert(new ConstrainedPlacementRecordingTestItem("Item {$weight}", 520, 520, 100, $weight, Rotation::Never), 2);
         }
-        $items->insert(new TestItem('Too heavy', 1300, 1300, 100, 1000, Rotation::Never));
+        $items->insert(new TestItem('Plank', 1300, 100, 100, 95, Rotation::KeepFlat));
 
         [$packedBox, $before] = self::packNotingWhereTheSearchPlacedIt(self::thorough(...), $box, $items);
 

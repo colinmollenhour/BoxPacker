@@ -208,7 +208,8 @@ final class PackingValidator
      * - but if the load would still hang over an edge after that, and closing the gaps along the axis between the
      *   stretches the items cover (items that overlap or touch along it covering one stretch) and then balancing the
      *   closed load in the same way would leave the larger of its two overhangs smaller, that: each item moves by the
-     *   total length of the gaps before its stretch back towards the low edge, then by the closed load's balancing move.
+     *   total length of the gaps before its stretch back towards the low edge, then by the closed load's balancing
+     *   move.
      *
      * A load already beyond its limits before the move is reported as such, and should not have been moved on that
      * axis. Without an allowed overhang (or with a zero one), nothing can hang over, so no move is right. Not to be

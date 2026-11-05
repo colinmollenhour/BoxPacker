@@ -267,16 +267,17 @@ final readonly class OverhangBounds
      * How far to move each of some groups of items (in the deck's frame, each group moving as one) along x and along y
      * to keep the load on the deck as far as it fits there, closing the gaps within it where the load hangs over.
      *
-     * Along each axis, groups whose extents (by their items' bounding boxes) overlap or touch form one part of the load.
-     * The gaps between the parts are closed, keeping the parts in order, and the closed load is then balanced as
+     * Along each axis, groups whose extents (by their items' bounding boxes) overlap or touch form one part of the
+     * load. The gaps between the parts are closed, keeping the parts in order, and the closed load is then balanced as
      * {@see centringShift()} balances a packing. That is done only on an axis on which the load would still hang over
      * an edge if it were balanced as it is, and only if closing the gaps makes the larger of its two overhangs there
      * smaller: on any other axis (as on one with no gaps), every group gets the move centringShift() gives the load.
      *
      * Items that touch one another (as an item and those supporting it do) overlap or touch along both axes, so are in
-     * the same part along each, and move together; parts stay apart. A part moved to close a gap starts no lower than the first
-     * part ends, which is past the low edge (no item can lie wholly beyond an edge), and ends no higher than it did, so
-     * every item is still within its caps (items at an angle within the deck) before the closed load is balanced.
+     * the same part along each, and move together; parts stay apart. A part moved to close a gap starts no lower than
+     * the first part ends, which is past the low edge (no item can lie wholly beyond an edge), and ends no higher than
+     * it did, so every item is still within its caps (items at an angle within the deck) before the closed load is
+     * balanced.
      *
      * Returned along x and along y: each group's move (by its index), the total length of the gaps between the parts as
      * found, whether they are closed, and the parts as found, as [start, end, move] (if not closed, the whole load as
