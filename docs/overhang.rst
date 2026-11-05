@@ -205,8 +205,9 @@ stage's check; later items are not asked. No move means no extra calls. A callba
 calls; an exception propagates out of ``pack()``. These calls do not use up the search budget.
 
 In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
-length or depth (flat items) are placed after the load and do not affect hole closing or centring. Each is placed on
-its own, trying orientations that fit the deck first. An accepted orientation that fits the deck stays at (0, 0);
+length or depth (flat items) are not part of the load: their extents are not counted when closing holes or centring,
+and they are placed after the load (see below for when they decide which move is kept). Each is placed on its own,
+trying orientations that fit the deck first. An accepted orientation that fits the deck stays at (0, 0);
 an orientation that needs overhang is centred within its own caps. A flat item with a placement callback is asked at
 that position, possibly first in an empty box to choose its orientation, then with the final items already packed
 as context. If it refuses, it is asked about its other orientations in turn, those that fit the deck first, each at

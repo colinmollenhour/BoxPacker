@@ -22,6 +22,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Stringable;
 
 use function array_column;
@@ -63,6 +64,13 @@ class OverhangPackingTest extends TestCase
     private const PALLET = [4800, 4000, 6500];
 
     private const NO_WEIGHT_LIMIT = 1000000000;
+
+    /**
+     * What the block search logs when a placement callback refuses the closed positions, and the balanced ones.
+     */
+    private const CLOSED_REFUSED = 'Overhang gaps not closed: a placement callback refused an item\'s position with the gaps closed';
+
+    private const BALANCED_REFUSED = 'Overhang not balanced: a placement callback refused an item\'s balanced position';
 
     private static function pallet(?AllowedOverhang $allowance, int $width = self::PALLET[0], int $length = self::PALLET[1], int $depth = self::PALLET[2], int $maxWeight = self::NO_WEIGHT_LIMIT): Box
     {
@@ -982,6 +990,7 @@ class OverhangPackingTest extends TestCase
         self::assertSame([], PackingValidator::centringProblems($packedBox));
         self::assertSame(['the load hangs over 250 and 113 along y, though its items\' extents along it come to 3764, which fits the deck\'s 4000'], PackingValidator::avoidableOverhangProblems($packedBox));
         self::assertSame('balanced', $log->stage);
+        self::assertSame(['Overhang gaps', self::CLOSED_REFUSED, 'Overhang balanced', 'Overhang finalised'], $log->messages);
         self::assertSame(self::mixedTwelve()[1], self::placements($packedBox));
 
         // after the search: the closed positions until the first refusal, then all 12 at the positions moved as a whole
@@ -1010,6 +1019,7 @@ class OverhangPackingTest extends TestCase
         self::assertNotSame([], PackingValidator::centringProblems($packedBox));
         self::assertNotSame([], PackingValidator::avoidableOverhangProblems($packedBox));
         self::assertSame('as found', $log->stage);
+        self::assertSame(['Overhang gaps', self::CLOSED_REFUSED, self::BALANCED_REFUSED, 'Overhang finalised'], $log->messages);
         self::assertSame([-250, 4703, -250, 4113], self::extents($packedBox));
         self::assertSame(array_map(static fn (string $placement): string => str_replace(' -77,', ' -250,', $placement), self::mixedTwelve()[1]), self::placements($packedBox));
         $replay = array_column(array_slice($trampoline->calls, $log->calls), 'proposal');
@@ -1017,6 +1027,41 @@ class OverhangPackingTest extends TestCase
         self::assertSame([-77, 118], array_slice($replay[0], 0, 2));
         self::assertSame(-77, $replay[1][0]);
         self::assertSame($log->placements, $blockPacker->getPlacements());
+    }
+
+    /**
+     * Callbacks for {@see constrainedTrampolines()} that throw when asked about a carton's position with the gap
+     * closed, or (refusing that) moved as a whole, and the overhang messages logged before.
+     *
+     * @return array<string, array{Closure(array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}): bool, list<string>}>
+     */
+    public static function throwingReplays(): array
+    {
+        return [
+            'with the gaps closed' => [static fn (array $proposal): bool => $proposal[1] === 118 ? throw new RuntimeException('Callback failed') : false, ['Overhang gaps']],
+            'moved as a whole' => [static fn (array $proposal): bool => $proposal[1] === 118 || ($proposal[0] === -77 ? throw new RuntimeException('Callback failed') : false), ['Overhang gaps', self::CLOSED_REFUSED]],
+        ];
+    }
+
+    /**
+     * @param Closure(array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}): bool $refuses
+     * @param list<string>                                                         $messages
+     */
+    #[DataProvider('throwingReplays')]
+    public function testAnExceptionFromACallbackDuringTheReplayPropagates(Closure $refuses, array $messages): void
+    {
+        // the callback only answers so once the search has finished, so it throws during the replay, which is left
+        // there: no further stage is tried, and the packing is not finalised
+        [$blockPacker, $trampoline, $log] = self::constrainedTrampolines($refuses);
+        try {
+            $blockPacker->pack();
+            self::fail('the exception did not leave pack()');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Callback failed', $exception->getMessage());
+        }
+        self::assertGreaterThan(0, $log->calls, 'the search had finished');
+        self::assertSame($messages, $log->messages);
+        self::assertNull($log->stage);
     }
 
     public function testAcceptedClosedPositionsAreAskedOnceEach(): void
