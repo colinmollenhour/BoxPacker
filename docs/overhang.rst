@@ -76,11 +76,12 @@ ends. Every item stays within it. Depth (height) is unchanged. Small items gain 
 
 Within one box, an allowance larger than any item's cap has no further effect on where items go: the search uses only as
 much of each allowance as the largest cap among the items allows. If no item can use the allowance in any of its
-orientations (every cap rounds down to zero), ``Fast`` packs the box exactly as one without an allowed overhang. Box
-selection and the thorough strategy's capacity bounds and sharing of search effort between packings use the full
-allowances, however. A very large allowance can therefore change which boxes are tried and how much search each one
-gets, so give allowances that match what the pallet can really carry. Allowances so large that the envelope's width,
-length or volume cannot be represented as an ``int`` make packing throw ``InvalidArgumentException``.
+orientations (every cap rounds down to zero, leaving out items too heavy for the box and orientations that do not fit
+it even with its overhang), ``Fast`` packs the box exactly as one without an allowed overhang. Box selection and the
+thorough strategy's capacity bounds and sharing of search effort between packings use the full allowances, however.
+A very large allowance can therefore change which boxes are tried and how much search each one gets, so give
+allowances that match what the pallet can really carry. Allowances so large that the envelope's width, length or
+volume cannot be represented as an ``int`` make packing throw ``InvalidArgumentException``.
 
 For example, an ACME Trampolines carton measures 49.53 × 22.52 × 7.56 in. On a 48 × 40 in pallet with a
 65 in maximum load height, these are the measured results for 24 cartons offered, free to rotate, with minimum
@@ -139,9 +140,11 @@ An overhanging item can have negative x or y, or end past the inner width or len
 ``ConstrainedPlacementItem::canBePacked()`` receives these same coordinates. A callback may refuse positions that
 hang over, for example to keep a product on the deck. The block search starts each block at the edge of the area its
 items may use, which hangs over. When a block of such an item is refused there, the search also offers the same
-block moved as far onto the deck as its free space allows, so the item can still be packed on the deck. Above the
-floor, blocks of items with callbacks are also tried in the part of a space over the deck. Items without callbacks are
-not: at full support they may not stack at the edges of a load that callbacks kept on the deck.
+block moved as far onto the deck as its free space allows. If nothing goes into a space that way (a block of many
+copies of one item can be too wide to move fully onto the deck, and above the floor a corner over the edge may have no
+support), blocks of items with callbacks are also tried in the part of the space over the deck, sized for it. So the
+item can still be packed on the deck. Items without callbacks are not tried there: at full support they may not stack
+at the edges of a load that callbacks kept on the deck.
 
 Code that consumes :doc:`positional information<positional-information>` must handle both sides of the deck.
 

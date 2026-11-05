@@ -53,18 +53,20 @@ v4.4.2 was withdrawn; this release replaces it.
 
 ### Fixed
 Fixes to v4.4.2:
-- Packing no longer fails with a `TypeError` when a box without an allowed overhang (or with a zero one) has an inner
-  volume too large for an `int`. Such a box is used as it was in v4.4.1
+- `Packer` with the Fast strategy no longer fails with a `TypeError` when one of its boxes without an allowed overhang
+  (or with a zero one) has an inner volume too large for an `int`: as in v4.4.1, the other boxes are tried. Such a box
+  still cannot be packed into, and `Packer` with the Thorough strategy still cannot be given one, as in v4.4.1
 - The block search no longer fails with a `TypeError` when the total volume of the items to pack is too large for an
   `int`, so a box with an allowed overhang packs such an order under Fast, and `VolumePacker` under either strategy.
   `Packer` under Thorough still rejects such an order, as it did in v4.4.1
 - In a box with an allowed overhang, an item whose `ConstrainedPlacementItem::canBePacked()` refuses positions that
-  hang over the edge can now be packed on the deck. The block search started such items at positions that hang over
-  and did not try them further in, so it could leave them all unpacked
+  hang over the edge can now be packed on the deck, also when many copies of one item are packed together. The block
+  search started such items at positions that hang over and did not try them further in, so it could leave them all
+  unpacked
 - A flat item (zero width, length or depth) that fits the deck in one of its allowed orientations no longer hangs
   over the edge
-- The Fast strategy packs a box whose allowance no item can use (every item's cap rounds down to zero) exactly as a
-  box without an allowed overhang
+- The Fast strategy packs a box whose allowance no item can use (the cap of every item that can go in rounds down to
+  zero) exactly as a box without an allowed overhang
 
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added

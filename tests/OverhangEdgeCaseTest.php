@@ -152,6 +152,73 @@ class OverhangEdgeCaseTest extends TestCase
         }
     }
 
+    /**
+     * @return array<string, array{int, int, int, AllowedOverhang, array{int, int, int, Rotation}, int, float, bool}>
+     */
+    public static function deckOnlyCopies(): array
+    {
+        // one item inserted many times is one type, packed in blocks of many. In each, the deck and the caps leave room
+        // for a block wider than the deck with one cap ((deck + 2 caps) mod item < cap): 1,021 across with caps of 3
+        // takes 51 20s, which still hang over by 2 when moved as far onto the deck as they go (as do 6 in 121 across);
+        // 116 across with caps of 8 takes 2 55s
+        $twenties = [1015, 1015, 10, new AllowedOverhang(sides: 3, frontAndBack: 3), [20, 20, 10, Rotation::BestFit]];
+        $wide = [100, 100, 10, new AllowedOverhang(sides: 8), [55, 100, 10, Rotation::Never]];
+
+        return [
+            'VolumePacker' => [...$twenties, 100, 0.5, false],
+            'Packer' => [...$twenties, 201, 0.5, true],
+            'VolumePacker, three layers fully supported' => [115, 115, 30, new AllowedOverhang(sides: 3, frontAndBack: 3), [20, 20, 10, Rotation::BestFit], 75, 1.0, false],
+            'VolumePacker, one to a box' => [...$wide, 41, 0.5, false],
+            'Packer, one to a box' => [...$wide, 201, 0.5, true],
+        ];
+    }
+
+    /**
+     * As above, for one item inserted many times: more copies than the Thorough strategy also packs with the Fast
+     * strategy for comparison.
+     *
+     * @param array{int, int, int, Rotation} $dimensions
+     */
+    #[DataProvider('deckOnlyCopies')]
+    public function testCopiesOfAnItemWhoseCallbackRefusesToHangOverArePackedOnTheDeck(int $width, int $length, int $depth, AllowedOverhang $allowance, array $dimensions, int $count, float $support, bool $viaPacker): void
+    {
+        $pack = static function (Box $box) use ($dimensions, $count, $support, $viaPacker): PackedBoxList {
+            $item = new EdgeCaseDeckOnlyTestItem('Item', $dimensions[0], $dimensions[1], $dimensions[2], 1, $dimensions[3]);
+            $items = new ItemList();
+            $items->insert($item, $count);
+            if ($viaPacker) {
+                $packer = new Packer();
+                $packer->setStrategy(PackingStrategy::Thorough);
+                $packer->setMinimumSupport($support);
+                $packer->throwOnUnpackableItem(false);
+                $packer->addBox($box);
+                $packer->setItems($items);
+
+                return $packer->pack();
+            }
+            $packer = new VolumePacker($box, $items);
+            $packer->setStrategy(PackingStrategy::Thorough);
+            $packer->setMinimumSupport($support);
+            $packedBoxes = new PackedBoxList();
+            $packedBoxes->insert($packer->pack());
+
+            return $packedBoxes;
+        };
+
+        $plain = $pack(new TestBox('Pallet', $width, $length, $depth, 0, $width, $length, $depth, 1000000));
+        $packedBoxes = $pack(new OverhangTestBox('Pallet', $width, $length, $depth, 0, $width, $length, $depth, 1000000, $allowance));
+
+        self::assertSame(self::itemCounts($plain), self::itemCounts($packedBoxes));
+        self::assertGreaterThan(0, $packedBoxes->top()->items->count());
+        foreach ($packedBoxes as $packedBox) {
+            self::assertSame([], PackingValidator::problems($packedBox));
+            self::assertGreaterThanOrEqual($support, PackingValidator::minimumSupport($packedBox));
+            foreach ($packedBox->items as $item) {
+                self::assertTrue($item->x >= 0 && $item->x + $item->width <= $width && $item->y >= 0 && $item->y + $item->length <= $length);
+            }
+        }
+    }
+
     public function testAFlatItemIsTurnedToFitTheDeckRatherThanHangOver(): void
     {
         // the sheet fits the box with its overhang as it is, 50 over each side (its cap is 150, the allowance 100), but
@@ -165,6 +232,24 @@ class OverhangEdgeCaseTest extends TestCase
         $packedBox = $packer->pack();
 
         self::assertSame(['Sheet 0,0,0 500x1100x0'], self::describe($packedBox));
+        self::assertSame([], PackingValidator::problems($packedBox));
+    }
+
+    public function testAFlatItemStandsOnEdgeToFitTheDeckRatherThanHangOver(): void
+    {
+        // lying flat, the only stable way, the card fits only with its overhang, 50 over each side; it fits the deck
+        // standing on edge, as it stands in the box without an allowed overhang
+        $items = new ItemList();
+        $items->insert(new TestItem('Card', 0, 500, 1100, 1, Rotation::BestFit));
+        $plain = new VolumePacker(new TestBox('Pallet', 1000, 1000, 1200, 0, 1000, 1000, 1200, 1000), $items);
+        $plain->setStrategy(PackingStrategy::Thorough);
+        $packer = new VolumePacker(new OverhangTestBox('Pallet', 1000, 1000, 1200, 0, 1000, 1000, 1200, 1000, new AllowedOverhang(sides: 100)), $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+
+        $packedBox = $packer->pack();
+
+        self::assertSame(['Card 0,0,0 0x500x1100'], self::describe($plain->pack()));
+        self::assertSame(['Card 0,0,0 0x500x1100'], self::describe($packedBox));
         self::assertSame([], PackingValidator::problems($packedBox));
     }
 
@@ -212,13 +297,31 @@ class OverhangEdgeCaseTest extends TestCase
         self::assertSame(0, $packer->getSearchPlacements());
     }
 
-    public function testAnAllowanceThatNoItemCanUsePacksAsNoAllowance(): void
+    /**
+     * @return array<string, array{?Item}>
+     */
+    public static function itemsThatCannotGoIn(): array
     {
-        // every item is under 7 across, so 15 % of it rounds down to 0. The layer packer puts the 5 × 5 in first (25);
-        // a block search would pack the four 3 × 3 (36) instead
+        // each is 7 across or more, so has a cap of 1, but cannot go in the box even with its overhang
+        return [
+            'none' => [null],
+            'too heavy' => [new TestItem('Too heavy', 7, 1, 1, 2000, Rotation::Never)],
+            'too wide' => [new TestItem('Too wide', 20, 1, 1, 1, Rotation::Never)],
+            'too tall' => [new TestItem('Too tall', 7, 1, 2, 1, Rotation::Never)],
+        ];
+    }
+
+    #[DataProvider('itemsThatCannotGoIn')]
+    public function testAnAllowanceThatNoItemCanUsePacksAsNoAllowance(?Item $cannotGoIn): void
+    {
+        // every item that can go in is under 7 across, so 15 % of it rounds down to 0. The layer packer puts the 5 × 5
+        // in first (25); a block search would pack the four 3 × 3 (36) instead
         $items = new ItemList();
         $items->insert(new TestItem('Large', 5, 5, 1, 1, Rotation::Never));
         $items->insert(new TestItem('Small', 3, 3, 1, 1, Rotation::Never), 4);
+        if ($cannotGoIn !== null) {
+            $items->insert($cannotGoIn);
+        }
         $box = new OverhangTestBox('Box', 6, 6, 1, 0, 6, 6, 1, 1000, new AllowedOverhang(sides: 1, frontAndBack: 1));
 
         foreach ([PackingStrategy::Fast, PackingStrategy::Thorough] as $strategy) {
@@ -252,6 +355,10 @@ class OverhangEdgeCaseTest extends TestCase
         self::assertFalse($ends->canHangOver(new TestItem('Wide', 7, 6, 1, 1, Rotation::Never)));
         self::assertTrue($ends->canHangOver(new TestItem('Wide', 7, 6, 1, 1, Rotation::KeepFlat)));
         self::assertTrue($sides->canHangOver(new TestItem('Wide', 7, 6, 1, 1, Rotation::Never)));
+        // only in an orientation in which it fits the box with its overhang
+        self::assertFalse($sides->canHangOver(new TestItem('Too wide', 20, 1, 1, 1, Rotation::Never)));
+        self::assertFalse($sides->canHangOver(new TestItem('Too tall', 7, 1, 101, 1, Rotation::Never)));
+        self::assertTrue($sides->canHangOver(new TestItem('Lying down', 1, 1, 7, 1, Rotation::BestFit)));
     }
 
     public function testAnItemWithNoVolumeInsideAnotherFailsTheRealWorldCheckOnlyWithoutAnAllowedOverhang(): void
@@ -269,6 +376,21 @@ class OverhangEdgeCaseTest extends TestCase
 
         $this->expectException(AssertionError::class);
         new PackedBox(new TestBox('Box', 100, 100, 100, 0, 100, 100, 100, 1000), $items);
+    }
+
+    /**
+     * The number of items in each box, in order.
+     *
+     * @return list<int>
+     */
+    private static function itemCounts(PackedBoxList $packedBoxes): array
+    {
+        $counts = [];
+        foreach ($packedBoxes as $packedBox) {
+            $counts[] = $packedBox->items->count();
+        }
+
+        return $counts;
     }
 
     /**

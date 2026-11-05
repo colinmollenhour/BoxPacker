@@ -437,8 +437,9 @@ class OverhangPackingTest extends TestCase
     public function testBlocksAreAnchoredAtAllFourCornersWithinTheirCaps(): void
     {
         // four 520 × 520 items (caps 78) on a 1000 × 1000 deck: two across each way need 40 of overhang. The search
-        // frame is wider (195 at each edge, the caps of an item too heavy to pack), so blocks anchored at the far
-        // corners must stop at the 520s' own caps, not at the edge of the frame. The load is then balanced already
+        // frame is wider (195 at each edge, the caps of a 1,300 plank, which can go in the box but not with all four of
+        // them, as it would take the box over its weight limit), so blocks anchored at the far corners must stop at the
+        // 520s' own caps, not at the edge of the frame. The load is then balanced already
         $box = self::pallet(new AllowedOverhang(sides: 200, frontAndBack: 300), 1000, 1000, 100, 100);
         $recorders = [];
         $items = new ItemList();
@@ -446,7 +447,7 @@ class OverhangPackingTest extends TestCase
             $recorders[] = $recorder = new ConstrainedPlacementRecordingTestItem("Item {$weight}", 520, 520, 100, $weight, Rotation::Never);
             $items->insert($recorder);
         }
-        $items->insert(new TestItem('Too heavy', 1300, 1300, 100, 1000, Rotation::Never));
+        $items->insert(new TestItem('Plank', 1300, 100, 100, 95, Rotation::KeepFlat));
 
         $packedBox = self::thorough($box, $items);
 

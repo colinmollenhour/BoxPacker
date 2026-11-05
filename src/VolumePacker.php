@@ -214,9 +214,9 @@ class VolumePacker implements LoggerAwareInterface
 
     /**
      * The Fast strategy: for a box with an allowed overhang, a greedy block search that uses it if the layer packer
-     * leaves items out (unless no item may hang over an edge, or items must be packed in order, in a single pass or
-     * across the width only, which only the layer packer does, on the deck alone), else the layer packer, or with
-     * angled placement allowed a greedy block search if an item needs it.
+     * leaves items out (unless no item that can go in may hang over an edge, or items must be packed in order, in a
+     * single pass or across the width only, which only the layer packer does, on the deck alone), else the layer
+     * packer, or with angled placement allowed a greedy block search if an item needs it.
      */
     private function packFastRouted(): PackedBox
     {
@@ -228,10 +228,10 @@ class VolumePacker implements LoggerAwareInterface
     }
 
     /**
-     * Whether the box has an allowed overhang that the Fast strategy can use: some item may hang over an edge (in an
-     * orientation its rotation allows), which the layer packer cannot do, so the block search is needed, which in turn
-     * needs the freedom to reorder items and to build the load in its own way. If no item may, the box packs exactly
-     * as one without an allowed overhang.
+     * Whether the box has an allowed overhang that the Fast strategy can use: some item that can go in (within the
+     * box's weight capacity, in an orientation that fits the box with its overhang) may hang over an edge, which the
+     * layer packer cannot do, so the block search is needed, which in turn needs the freedom to reorder items and to
+     * build the load in its own way. If no such item may, the box packs exactly as one without an allowed overhang.
      */
     private function usesOverhangBlockSearch(): bool
     {
@@ -244,12 +244,14 @@ class VolumePacker implements LoggerAwareInterface
 
             return false;
         }
+        // only items that can go in, as the block search packs (an item that cannot must not change how the others go)
+        $weightCapacity = $this->box->getMaxWeight() - $this->box->getEmptyWeight();
         foreach ($this->items as $item) {
-            if ($overhang->canHangOver($item)) {
+            if ($item->getWeight() <= $weightCapacity && $overhang->canHangOver($item)) {
                 return true;
             }
         }
-        $this->logger->debug("Allowed overhang not used for box {$this->box->getReference()}: no item may hang over an edge (every item's cap is 0)");
+        $this->logger->debug("Allowed overhang not used for box {$this->box->getReference()}: no item that can go in may hang over an edge (every such item's cap is 0)");
 
         return false;
     }

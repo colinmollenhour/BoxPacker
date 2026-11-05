@@ -834,26 +834,31 @@ class BlockPacker implements LoggerAwareInterface
         $lowX = $space[0] <= $this->boxWidth - $space[3];
         $lowY = $space[1] <= $this->boxLength - $space[4];
         $candidates = $this->candidatesAt($state, $space, $limit, $lowX, $lowY);
-        if ($candidates !== [] || $space[2] === 0) {
+        if ($candidates !== []) {
             return $candidates;
         }
 
         // A raised space may be supported at one of its other bottom corners even if not at the preferred one
-        foreach ([[$lowX, !$lowY], [!$lowX, $lowY], [!$lowX, !$lowY]] as [$cornerX, $cornerY]) {
-            $candidates = $this->candidatesAt($state, $space, $limit, $cornerX, $cornerY);
-            if ($candidates !== []) {
-                return $candidates;
+        $corners = [[$lowX, $lowY]];
+        if ($space[2] > 0) {
+            foreach ([[$lowX, !$lowY], [!$lowX, $lowY], [!$lowX, !$lowY]] as [$cornerX, $cornerY]) {
+                $candidates = $this->candidatesAt($state, $space, $limit, $cornerX, $cornerY);
+                if ($candidates !== []) {
+                    return $candidates;
+                }
+                $corners[] = [$cornerX, $cornerY];
             }
         }
 
-        // With an allowed overhang, blocks go at the corners of where they may go, which in a raised space are often
-        // over the edges, with no support if the load below is on the deck (as a load of items whose placement
-        // callbacks refuse to hang over is): so blocks of items with callbacks are also tried at the corners of the part
-        // of the space over the deck
+        // With an allowed overhang, blocks go at the corners of where they may go, which are often over the edges. A
+        // placement callback may refuse every position there (a block of copies of one item can be too wide to move
+        // fully onto the deck within the space), and in a raised space there is no support there if the load below is
+        // on the deck (as a load of such items is): so blocks of items with callbacks are also tried at the same
+        // corners of the part of the space over the deck, sized for it
         if ($this->overhang !== null) {
             $deck = [max($space[0], $this->deckX), max($space[1], $this->deckY), $space[2], min($space[3], $this->deckX + $this->deckWidth), min($space[4], $this->deckY + $this->deckLength), $space[5]];
             if ($deck[0] < $deck[3] && $deck[1] < $deck[4] && ($deck[0] !== $space[0] || $deck[1] !== $space[1] || $deck[3] !== $space[3] || $deck[4] !== $space[4]) && $this->hasConstrainedLeft($state)) {
-                foreach ([[$lowX, $lowY], [$lowX, !$lowY], [!$lowX, $lowY], [!$lowX, !$lowY]] as [$cornerX, $cornerY]) {
+                foreach ($corners as [$cornerX, $cornerY]) {
                     $candidates = $this->candidatesAt($state, $deck, $limit, $cornerX, $cornerY, true);
                     if ($candidates !== []) {
                         return $candidates;
@@ -1792,8 +1797,9 @@ class BlockPacker implements LoggerAwareInterface
             $orientations = $this->buildOrientations($item);
             $orientation = $orientations[0] ?? null;
             if ($this->overhang !== null) {
-                // one that fits the deck, so as not to hang over if it need not
-                foreach ($orientations as $fitting) {
+                // one that fits the deck, so as not to hang over if it need not: a preferred (stable) one if one does,
+                // else any (as in a box without an allowed overhang, in which only those fit)
+                foreach ([...$orientations, ...$this->fittingOrientations($item)] as $fitting) {
                     if ($fitting[0] <= $this->deckWidth && $fitting[1] <= $this->deckLength) {
                         $orientation = $fitting;
                         break;
@@ -1865,6 +1871,35 @@ class BlockPacker implements LoggerAwareInterface
      */
     private function buildOrientations(Item $item): array
     {
+        $fitting = $this->fittingOrientations($item);
+        if (!$this->preferStableOrientations) {
+            return $fitting;
+        }
+
+        $stable = [];
+        $anyStable = false;
+        foreach ($fitting as [$ow, $ol, $oh]) {
+            $isStable = atan(min($ow, $ol) / ($oh ?: 1)) > self::STABILITY_ANGLE;
+            if ($isStable || $oh === $this->boxDepth) {
+                $stable[] = [$ow, $ol, $oh];
+            }
+            if ($isStable && !$anyStable) {
+                // asked about a position in the empty box at which the item is within its caps
+                $anyStable = !$item instanceof ConstrainedPlacementItem || $item->canBePacked(new PackedBox($this->box, new PackedItemList()), $this->overhang?->startX($ow) ?? 0, $this->overhang?->startY($ol) ?? 0, 0, $ow, $ol, $oh);
+            }
+        }
+
+        return $anyStable ? $stable : $fitting;
+    }
+
+    /**
+     * Distinct orientations of the item that fit the empty box (with its overhang, if it has an allowed overhang),
+     * stable or not.
+     *
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private function fittingOrientations(Item $item): array
+    {
         $w = $item->getWidth();
         $l = $item->getLength();
         $d = $item->getDepth();
@@ -1883,24 +1918,7 @@ class BlockPacker implements LoggerAwareInterface
             }
         }
 
-        if (!$this->preferStableOrientations) {
-            return array_values($fitting);
-        }
-
-        $stable = [];
-        $anyStable = false;
-        foreach ($fitting as [$ow, $ol, $oh]) {
-            $isStable = atan(min($ow, $ol) / ($oh ?: 1)) > self::STABILITY_ANGLE;
-            if ($isStable || $oh === $this->boxDepth) {
-                $stable[] = [$ow, $ol, $oh];
-            }
-            if ($isStable && !$anyStable) {
-                // asked about a position in the empty box at which the item is within its caps
-                $anyStable = !$item instanceof ConstrainedPlacementItem || $item->canBePacked(new PackedBox($this->box, new PackedItemList()), $this->overhang?->startX($ow) ?? 0, $this->overhang?->startY($ol) ?? 0, 0, $ow, $ol, $oh);
-            }
-        }
-
-        return $anyStable ? $stable : array_values($fitting);
+        return array_values($fitting);
     }
 
     /**

@@ -72,7 +72,7 @@ class AllowedOverhangTest extends TestCase
     {
         return [
             'three' => [[150, 150, 300]],
-            'four (the removed left, right, front, back)' => [[150, 150, 300, 300]],
+            'four (a stale left, right, front, back call)' => [[150, 150, 300, 300]],
         ];
     }
 
@@ -80,10 +80,10 @@ class AllowedOverhangTest extends TestCase
      * @param list<int> $arguments
      */
     #[DataProvider('tooManyArguments')]
-    public function testTheFourEdgeFormIsRejected(array $arguments): void
+    public function testMoreThanTwoArgumentsAreRejected(array $arguments): void
     {
         $this->expectException(ArgumentCountError::class);
-        $this->expectExceptionMessage('sides and frontAndBack');
+        $this->expectExceptionMessage('AllowedOverhang takes two allowances, sides and frontAndBack (each per edge); more than two arguments (such as a stale four-value call) are rejected');
         new AllowedOverhang(...$arguments);
     }
 
