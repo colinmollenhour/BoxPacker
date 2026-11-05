@@ -11,6 +11,7 @@ namespace DVDoug\BoxPacker\Benchmark;
 
 use DVDoug\BoxPacker\AllowedOverhang;
 use DVDoug\BoxPacker\AngledGeometry;
+use DVDoug\BoxPacker\Box;
 use DVDoug\BoxPacker\OverhangBox;
 use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedItem;
@@ -57,7 +58,7 @@ final class PackingValidator
             $problems[] = "overweight {$packedBox->getWeight()} > {$box->getMaxWeight()}";
         }
 
-        $allowance = $box instanceof OverhangBox ? $box->getAllowedOverhang() : null;
+        $allowance = self::allowance($box);
         $count = count($items);
         for ($i = 0; $i < $count; ++$i) {
             $a = $items[$i];
@@ -78,13 +79,15 @@ final class PackingValidator
             if ($a->item instanceof BischoffConstrainedTestItem && !$a->item->canBePacked($packedBox, $a->x, $a->y, $a->z, $a->width, $a->length, $a->depth)) {
                 $problems[] = "item {$i} stood on a disallowed edge";
             }
-            // an item with no volume (a zero width, length or depth) takes no space, so cannot collide with another
-            if ($a->width * $a->length * $a->depth === 0) {
+            // with an allowed overhang, an item with no volume (a zero width, length or depth) is placed after the load
+            // has been moved, so may stand inside an item's footprint: it takes no space, so cannot collide with another.
+            // Every other box is checked as it always was
+            if ($allowance !== null && $a->width * $a->length * $a->depth === 0) {
                 continue;
             }
             for ($j = $i + 1; $j < $count; ++$j) {
                 $b = $items[$j];
-                if ($b->width * $b->length * $b->depth > 0
+                if (($allowance === null || $b->width * $b->length * $b->depth > 0)
                     && $a->z < $b->z + $b->depth && $b->z < $a->z + $a->depth
                     && AngledGeometry::polygonsOverlap(AngledGeometry::footprint($a), AngledGeometry::footprint($b))) {
                     $problems[] = "items {$i} and {$j} overlap";
@@ -103,15 +106,20 @@ final class PackingValidator
      * item with no volume is checked in the same way on its own. Not to be used for a packing that kept its position
      * because a placement callback refused a balanced one.
      *
+     * This looks at the packing as it is, so cannot tell where the load was before it was moved: on an axis on which
+     * the load hangs over neither edge, any position passes, so a load moved by the wrong amount (or moved when it
+     * should not have been) but onto the deck is not caught here. {@see shiftProblems()} checks the move itself, given
+     * where the items were before it.
+     *
      * @return list<string> problems found (empty = balanced, or nothing to balance)
      */
     public static function centringProblems(PackedBox $packedBox): array
     {
         $box = $packedBox->box;
-        if (!$box instanceof OverhangBox) {
+        $allowance = self::allowance($box);
+        if ($allowance === null) {
             return [];
         }
-        $allowance = $box->getAllowedOverhang();
         $load = [];
         $problems = [];
         foreach ($packedBox->items as $item) {
@@ -137,8 +145,10 @@ final class PackingValidator
      * each axis is worked out here from the items before it alone: none on an axis on which nothing hangs over an edge
      * (a gap counting as a negative overhang); else half the difference of the two overhangs, rounded towards zero (so
      * of two equally good moves, the smaller), but no further than keeps every item within its limits at both edges
-     * (an item at an angle within the box). Not to be used for a packing that kept its position because a placement
-     * callback refused a balanced one.
+     * (an item at an angle within the box). A load already beyond those limits before the move is reported as such,
+     * and should not have been moved on that axis. Without an allowed overhang (or with a zero one), nothing can hang
+     * over, so no move is right. Not to be used for a packing that kept its position because a placement callback
+     * refused a balanced one.
      *
      * @param  iterable<PackedItem> $before
      * @return list<string>         problems found (empty = moved as it should have been, or not moved if it should not)
@@ -146,7 +156,7 @@ final class PackingValidator
     public static function shiftProblems(iterable $before, PackedBox $after): array
     {
         $box = $after->box;
-        $allowance = $box instanceof OverhangBox ? $box->getAllowedOverhang() : new AllowedOverhang();
+        $allowance = self::allowance($box) ?? new AllowedOverhang();
         $load = $was = [];
         foreach ($before as $item) {
             if ($item->width * $item->length * $item->depth > 0) {
@@ -201,6 +211,8 @@ final class PackingValidator
             }
             if ($lowest > 0 || $highest < 0) {
                 $problems[] = "the load was beyond its limits along {$axis} before the move";
+                $expected[] = 0; // a packing that breaks its limits is never moved
+                continue;
             }
             $difference = $overhangBefore - $overhangAfter;
             $half = (int) (($difference - $difference % 2) / 2); // % takes the sign of the difference: rounded towards 0
@@ -224,7 +236,7 @@ final class PackingValidator
         /** @var list<PackedItem> $items */
         $items = iterator_to_array($packedBox->items, false);
         $box = $packedBox->box;
-        $allowance = $box instanceof OverhangBox ? $box->getAllowedOverhang() : null;
+        $allowance = self::allowance($box);
         $minimum = 1.0;
         foreach ($items as $item) {
             if ($item->z === 0) {
@@ -244,6 +256,20 @@ final class PackingValidator
         }
 
         return $minimum;
+    }
+
+    /**
+     * The box's allowed overhang, or null if it has none: if it does not opt in, or allows none at any edge (and so is
+     * checked exactly as the same box without it, as it packs exactly the same).
+     */
+    private static function allowance(Box $box): ?AllowedOverhang
+    {
+        if (!$box instanceof OverhangBox) {
+            return null;
+        }
+        $allowance = $box->getAllowedOverhang();
+
+        return $allowance->sides === 0 && $allowance->frontAndBack === 0 ? null : $allowance;
     }
 
     /**

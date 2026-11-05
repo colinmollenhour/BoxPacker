@@ -15,6 +15,7 @@ use DVDoug\BoxPacker\ItemList;
 use DVDoug\BoxPacker\PackedBox;
 use DVDoug\BoxPacker\PackedBoxList;
 use DVDoug\BoxPacker\Packer;
+use DVDoug\BoxPacker\PackingStrategy;
 use DVDoug\BoxPacker\Rotation;
 use DVDoug\BoxPacker\Test\OverhangTestBox;
 use DVDoug\BoxPacker\Test\TestBox;
@@ -178,6 +179,16 @@ class PackerContext implements Context
     }
 
     /**
+     * @When I do a thorough volume-only packing
+     */
+    public function iDoAThoroughVolumePacking(): void
+    {
+        $packer = new VolumePacker($this->box, $this->itemList);
+        $packer->setStrategy(PackingStrategy::Thorough);
+        $this->packedBox = $packer->pack();
+    }
+
+    /**
      * @Then /^I should have (\d+) boxes of type "([^"]+)"$/
      */
     public function thereExistsBoxes(
@@ -230,6 +241,7 @@ class PackerContext implements Context
             $ys[] = $packedItem->y + $packedItem->boundingLength;
         }
 
+        Assert::assertNotEmpty($xs, 'The packed box has no items');
         Assert::assertSame([(int) $minX, (int) $maxX, (int) $minY, (int) $maxY], [\min($xs), \max($xs), \min($ys), \max($ys)]);
     }
 

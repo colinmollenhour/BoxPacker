@@ -1,18 +1,25 @@
 # Changelog
 
-## [4.5.0] - Unreleased
+## [4.4.3] - 2026-11-04
+v4.4.2 was withdrawn; this release replaces it.
+
 ### Added
 - Opt-in allowed overhang for pallets: a box implementing the new `OverhangBox` interface returns an `AllowedOverhang`
   value object with two symmetric allowances, `sides` and `frontAndBack`, each applying at each of its two edges.
   Both default to zero; negative values throw `InvalidArgumentException` and more than two arguments throw
-  `ArgumentCountError` (the four-edge constructor form was removed)
+  `ArgumentCountError`, so that a stale four-value call fails. The allowance must not change while a packing is in
+  progress or while its packed boxes are used: their JSON, their visualiser URLs and the checks made when PHP
+  assertions are enabled read it from the box
 - Each item may hang over an edge by at most the smaller of the allowance and 15% of its own extent across that edge,
-  rounded down, at every height. Thorough searches the envelope within those caps; Fast also runs a greedy block
-  search that uses them and keeps whichever of that and its usual packing on the deck uses more volume.
-  Utilisation, the default cost and the default box order stay based on the real deck
+  rounded down, at every height. Thorough searches the envelope within those caps. Fast packs the deck with its usual
+  layer packer first; unless that holds every item, it also runs a greedy block search that uses the caps and keeps
+  whichever of the two uses more volume. Utilisation, the default cost and the default box order stay based on the
+  real deck
 - Packed-box JSON includes `box.allowedOverhang` as `{"sides": 150, "frontAndBack": 300}`, and visualiser URLs include
   an optional sixth box element `[sides, sides, frontAndBack, frontAndBack]`, when the allowance is non-zero.
-  The visualiser draws the deck and the envelope and still reads any four-value URL
+  The visualiser in this repository draws the deck and the envelope, and ignores a sixth element that is not four
+  non-negative numbers. The generated URLs point at the published `boxpacker.io` page, which ignores the sixth
+  element until it is rebuilt from this version
 
 ### Changed
 - For a box with a non-zero allowed overhang only:
@@ -21,23 +28,49 @@
   - After packing, the whole load is moved on each axis on which it hangs over an edge to minimise its larger
     overhang, counting gaps as negative overhang and choosing the smaller move on a tie. Every item stays within
     its caps, and angled items stay on the deck. This balances overhang, not the centre of gravity, and cannot close
-    gaps inside the load. A deck-fitting load found overhanging can end up centred on the deck; Fast's layer packing
-    stays in its original position, as it does when Thorough keeps it (for up to 40 items, when the search leaves some
-    out and the layer packing is at least as dense)
+    gaps inside the load. A deck-fitting load found overhanging can end up centred on the deck; a load found entirely
+    on the deck is not moved. Fast's layer packing never overhangs and stays in its original position, also when
+    Thorough's result is a Fast packing: for one box of up to 40 items when the search leaves some out and the layer
+    packing is at least as dense; with `packBestSubset()` for up to 40 items, whose Fast best subset can also be a
+    centred greedy block search; and with `Packer` for orders of up to 200 items, when Fast's boxes for the whole
+    order are kept
   - When the load moves, placement callbacks are asked again at the proposed final positions, in packing order until
     one refuses, with only their already-moved predecessors as context. On the first refusal, the whole load keeps the
     position the search found.
     Exceptions propagate out of `pack()`; these extra calls do not use up the search budget
   - In a packing found by the block search (Thorough, and Fast's greedy block search), items with a zero width, length
-    or depth are placed after the load and do not affect its centring: each stays at (0, 0) if it fits the deck, or is
-    centred on its own within its caps if it needs overhang. A constrained one is asked at that position, possibly
-    first in an empty box to choose its orientation, then with the final items as context, and is skipped if it
-    refuses. Fast's layer packing places them as it always has
+    or depth are placed after the load and do not affect its centring: each takes an orientation that fits the deck
+    if it has one and stays at (0, 0), or is centred on its own within its caps if it needs overhang. A constrained
+    one is asked at that position, possibly first in an empty box to choose its orientation, then with the final
+    items as context; if it refuses, it is asked about its other orientations in turn (those that fit the deck first),
+    and is skipped only if it refuses them all. Fast's layer packing places them as it always has
   - `getUsedWidth()` and `getUsedLength()` include the overhang and any gap before a centred load, so
     `getRemainingWidth()` and `getRemainingLength()` can be negative; for a load centred onto the deck they measure
     only the far gap. As items can take up more than the inner volume, `getUnusedVolume()` can be negative too and
     volume utilisation can exceed 100%
-  - `setMinimumSupport()` also applies to the Fast strategy's block search
+  - `setMinimumSupport()` also applies to the Fast strategy's greedy block search, but not to its layer packing,
+    which Fast keeps when it is at least as dense. Use Thorough when every item must meet the minimum
+  - Strict item ordering and `packAcrossWidthOnly()` pack the deck only, with either strategy
+
+### Fixed
+Fixes to v4.4.2:
+- `Packer` with the Fast strategy no longer fails with a `TypeError` when one of its boxes without an allowed overhang
+  (or with a zero one) has an inner volume too large for an `int`: as in v4.4.1, the other boxes are tried. Such a box
+  still cannot be packed into, and `Packer` with the Thorough strategy still cannot be given one, as in v4.4.1
+- The block search no longer fails with a `TypeError` when the total volume of the items to pack is too large for an
+  `int`, so a box with an allowed overhang packs such an order under Fast, and `VolumePacker` under either strategy.
+  This fixes v4.4.1 too, for boxes without an allowed overhang: `VolumePacker` under Thorough, and under Fast with
+  angled placement where an item needs it, now packs such an order where v4.4.1 threw. `Packer` under Thorough still
+  rejects such an order, as it did in v4.4.1
+- In a box with an allowed overhang, an item whose `ConstrainedPlacementItem::canBePacked()` refuses positions that
+  hang over the edge can now be packed on the deck, also when many copies of one item are packed together. The block
+  search started such items at positions that hang over and did not try them further in, so it could leave them all
+  unpacked
+- A flat item (zero width, length or depth) that fits the deck in one of its allowed orientations no longer hangs
+  over the edge, unless its placement callback refuses it there
+- The Fast strategy packs a box whose allowance no item can use (the cap of every item that can go in rounds down to
+  zero, but for flat items without a placement callback that fit the deck) exactly as a box without an allowed
+  overhang
 
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added

@@ -38,6 +38,10 @@ final readonly class OverhangBounds
         public int $sides,
         public int $frontAndBack,
     ) {
+        // AllowedOverhang's constructor rejects these, but an instance can be made without it (by unserialize())
+        if ($sides < 0 || $frontAndBack < 0) {
+            throw new InvalidArgumentException("Allowed overhang cannot be negative (sides {$sides}, frontAndBack {$frontAndBack})");
+        }
         if ($sides > intdiv(PHP_INT_MAX - $width, 2) || $frontAndBack > intdiv(PHP_INT_MAX - $length, 2)) {
             throw new InvalidArgumentException('Allowed overhang is too large: the box with its overhang would be wider or longer than can be represented');
         }
@@ -88,9 +92,11 @@ final readonly class OverhangBounds
 
     /**
      * Volume the items in the box could take up at most: that of the box with its overhang (the envelope) if it has
-     * one, else the inner volume.
+     * one, else the inner volume. The envelope's volume is always an int (an allowance too large for that makes packing
+     * throw), but the inner volume of any other box is, as it always was, the product of its inner dimensions: a float
+     * if that is too large for an int.
      */
-    public static function capacityVolume(Box $box): int
+    public static function capacityVolume(Box $box): int|float
     {
         return self::forBox($box)?->envelopeVolume() ?? $box->getInnerWidth() * $box->getInnerLength() * $box->getInnerDepth();
     }
@@ -140,6 +146,38 @@ final readonly class OverhangBounds
     public function endCap(int $length): int
     {
         return self::cap($this->frontAndBack, $length);
+    }
+
+    /**
+     * Whether the item may hang over an edge: whether, in some orientation its rotation allows in which it fits the box
+     * with its overhang, its cap across an edge is above 0. An item with no volume (a zero width, length or depth) is
+     * placed on its own, on the deck if it fits it in such an orientation, so may then hang over only if its placement
+     * callback ({@see ConstrainedPlacementItem}) refuses that. If no item that can go in may, the overhang cannot be
+     * used.
+     */
+    public function canHangOver(Item $item): bool
+    {
+        $width = $item->getWidth();
+        $length = $item->getLength();
+        $depth = $item->getDepth();
+        $orientations = match ($item->getAllowedRotation()) {
+            Rotation::Never => [[$width, $length, $depth]],
+            Rotation::KeepFlat => [[$width, $length, $depth], [$length, $width, $depth]],
+            Rotation::BestFit => [[$width, $length, $depth], [$length, $width, $depth], [$width, $depth, $length], [$length, $depth, $width], [$depth, $width, $length], [$depth, $length, $width]],
+        };
+        $placedOnTheDeck = ($width === 0 || $length === 0 || $depth === 0) && !$item instanceof ConstrainedPlacementItem;
+        $canHangOver = false;
+        foreach ($orientations as [$acrossSides, $acrossEnds, $height]) {
+            if ($height > $this->depth || !$this->fits($acrossSides, $acrossEnds)) {
+                continue;
+            }
+            if ($placedOnTheDeck && $acrossSides <= $this->width && $acrossEnds <= $this->length) {
+                return false;
+            }
+            $canHangOver = $canHangOver || $this->sideCap($acrossSides) > 0 || $this->endCap($acrossEnds) > 0;
+        }
+
+        return $canHangOver;
     }
 
     /**

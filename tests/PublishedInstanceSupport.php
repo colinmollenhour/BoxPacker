@@ -20,6 +20,7 @@ use function fgetcsv;
 use function fgets;
 use function fopen;
 use function is_array;
+use function min;
 use function sprintf;
 use function trim;
 
@@ -113,14 +114,18 @@ trait PublishedInstanceSupport
     }
 
     /**
+     * @param  ?int                                                         $limit the most problems to read (all if null)
      * @return array<string, array{0: string, 1: Box, 2: ItemList, 3: int}>
      */
-    public static function decodeInstanceFile(string $filename): array
+    public static function decodeInstanceFile(string $filename, ?int $limit = null): array
     {
         $data = [];
 
         $handle = fopen(__DIR__ . '/data/' . $filename, 'rb');
-        $problemCount = trim(fgets($handle));
+        $problemCount = (int) trim(fgets($handle));
+        if ($limit !== null) {
+            $problemCount = min($problemCount, $limit);
+        }
 
         for ($p = 1; $p <= $problemCount; ++$p) {
             $problemId = explode(' ', trim(fgets($handle)))[0];

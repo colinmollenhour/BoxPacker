@@ -69,7 +69,8 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Get remaining width inside box for another item: inner width less used width (negative if items hang over the
-     * sides of a box with an allowed overhang by more than is left).
+     * sides of a box with an allowed overhang by more than is left). For a load that a box with an allowed overhang has
+     * moved off x = 0 to balance its overhang, the gap at the left counts as used, so this is only the gap at the right.
      */
     public function getRemainingWidth(): int
     {
@@ -78,7 +79,8 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Get remaining length inside box for another item: inner length less used length (negative if items hang over
-     * the front or back of a box with an allowed overhang by more than is left).
+     * the front or back of a box with an allowed overhang by more than is left). As with the width, for a load moved to
+     * balance its overhang this is only the gap at the back.
      */
     public function getRemainingLength(): int
     {
@@ -256,8 +258,8 @@ readonly class PackedBox implements JsonSerializable
 
     /**
      * Geometric and weight invariants of a finished box: in-bounds (within the caps
-     * of any allowed overhang), no overlaps (among items with a volume), legal item
-     * orientation, under max weight.
+     * of any allowed overhang), no overlaps (with an allowed overhang, among items
+     * with a volume), legal item orientation, under max weight.
      *
      * Placement callbacks and linked-group membership need the live unpacked list
      * and are enforced at pack time, not here.
@@ -285,12 +287,13 @@ readonly class PackedBox implements JsonSerializable
             }
             assert($this->packedDimensionsMatchItem($itemToCheck));
 
-            // an item with no volume (a zero width, length or depth) takes no space, so cannot collide with another
-            if ($itemToCheck->width * $itemToCheck->length * $itemToCheck->depth === 0) {
+            // with an allowed overhang, an item with no volume (a zero width, length or depth) is placed on its own once
+            // the load has been moved, so it may lie within the load: it takes no space, so does not collide
+            if ($overhang !== null && $itemToCheck->width * $itemToCheck->length * $itemToCheck->depth === 0) {
                 continue;
             }
             foreach ($itemsToCheck as $otherItem) {
-                if ($otherItem->width * $otherItem->length * $otherItem->depth === 0) {
+                if ($overhang !== null && $otherItem->width * $otherItem->length * $otherItem->depth === 0) {
                     continue;
                 }
                 $hasXOverlap = $itemToCheck->x < ($otherItem->x + $otherItem->boundingWidth) && $otherItem->x < ($itemToCheck->x + $itemToCheck->boundingWidth);

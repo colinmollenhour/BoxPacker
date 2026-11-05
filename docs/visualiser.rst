@@ -18,8 +18,12 @@ Visualiser
     For boxes with :doc:`allowed overhang<overhang>`, the visualiser draws the real deck outline and a dashed amber
     envelope outline, and spaces boxes using the envelope so overhanging items stay in view. Each edge of the envelope
     is drawn only as far as the box's packed items could hang over it. Generated URLs repeat each of the two allowances
-    at its two edges in the sixth box element, ``[sides, sides, frontAndBack, frontAndBack]``; the visualiser still reads
-    any four-value URL.
+    at its two edges in the sixth box element, ``[sides, sides, frontAndBack, frontAndBack]``; the visualiser accepts
+    any four non-negative numbers there.
+
+    Generated URLs point at the published copy of this page on ``boxpacker.io``, which draws the envelope only once
+    it is rebuilt from this version. Until then it ignores the sixth element: it draws no envelope and spaces boxes by
+    their decks, so items that hang over can reach into the space of a neighbouring box.
 
 .. raw:: html
 

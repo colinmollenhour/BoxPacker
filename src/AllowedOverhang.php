@@ -35,10 +35,10 @@ final readonly class AllowedOverhang implements JsonSerializable
         public int $sides = 0,
         public int $frontAndBack = 0,
     ) {
-        // PHP drops extra positional arguments to a constructor without a word, so a call written for the removed
-        // four-edge form would otherwise be read as a different allowance
+        // PHP drops extra positional arguments to a constructor without a word, so a call with more (such as a stale
+        // call with four values, one per edge) would otherwise be read as a different allowance
         if (func_num_args() > 2) {
-            throw new ArgumentCountError('AllowedOverhang takes two allowances, sides and frontAndBack (each per edge); the four-edge form (left, right, front, back) was removed');
+            throw new ArgumentCountError('AllowedOverhang takes two allowances, sides and frontAndBack (each per edge); more than two arguments (such as a stale four-value call) are rejected');
         }
         if ($sides < 0 || $frontAndBack < 0) {
             throw new InvalidArgumentException("Allowed overhang cannot be negative (sides {$sides}, frontAndBack {$frontAndBack})");

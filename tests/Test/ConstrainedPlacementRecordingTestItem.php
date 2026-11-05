@@ -16,7 +16,8 @@ use DVDoug\BoxPacker\PackedItem;
 use function iterator_to_array;
 
 /**
- * Accepts every placement, recording what it was asked.
+ * Accepts every placement (or, while told to, refuses every one), recording what it was asked. Its answer never
+ * depends on the position.
  */
 class ConstrainedPlacementRecordingTestItem extends TestItem implements ConstrainedPlacementItem
 {
@@ -26,6 +27,8 @@ class ConstrainedPlacementRecordingTestItem extends TestItem implements Constrai
      * @var list<array{proposal: array{0: int, 1: int, 2: int, 3: int, 4: int, 5: int}, context: list<PackedItem>}>
      */
     public array $calls = [];
+
+    public bool $refusing = false;
 
     public function canBePacked(
         PackedBox $packedBox,
@@ -41,6 +44,6 @@ class ConstrainedPlacementRecordingTestItem extends TestItem implements Constrai
             'context' => iterator_to_array($packedBox->items, false),
         ];
 
-        return true;
+        return !$this->refusing;
     }
 }

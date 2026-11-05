@@ -236,8 +236,9 @@ class Packer implements LoggerAwareInterface
     }
 
     /**
-     * The minimum fraction (0-1) of each item's base that must rest on the box floor or on other items, see
-     * {@see VolumePacker::setMinimumSupport()}.
+     * Thorough strategy, and the Fast strategy's block search only: the minimum fraction (0-1) of each item's base that
+     * must rest on the box floor or on other items, see {@see VolumePacker::setMinimumSupport()}. The Fast strategy's
+     * layer packing, which it may keep instead of its block search, has no support rule.
      */
     public function setMinimumSupport(float $fraction): void
     {
