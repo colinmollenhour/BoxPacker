@@ -26,9 +26,9 @@ interface ConstrainedPlacementItem extends Item
      * overhang, with the items packed before it (also at their proposed final positions) in the box: first with the
      * gaps in the load closed (where closing them lessens its overhang), and if it or any later item refuses that, with
      * the load moved as a whole. If it or any later item refuses that too, the whole packing keeps the position it was
-     * found in, so accepting is not a commitment. Nor is it if an item with no volume and a placement callback is left
-     * out with the gaps closed: the load moved as a whole may then be asked about too, after the closed one was
-     * accepted.
+     * found in, so accepting is not a commitment. Nor is it if, with the gaps closed, any item with no volume is left
+     * out while some item with no volume has a placement callback: the load moved as a whole may then be asked about
+     * too, after the closed one was accepted.
      */
     public function canBePacked(
         PackedBox $packedBox,

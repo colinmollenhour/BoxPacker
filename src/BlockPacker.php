@@ -1783,8 +1783,9 @@ class BlockPacker implements LoggerAwareInterface
      * as far as it fits there and to balance its overhang, as far as the items' placement callbacks accept: with the
      * gaps in the load closed where that lessens its overhang (see {@see OverhangBounds::closingMoves()}), else moved
      * as a whole (see {@see OverhangBounds::centringShift()}), else as found. If the load with its gaps closed leaves
-     * out an item with no volume that has a placement callback, the load moved as a whole is also tried (and its items
-     * asked about it), and is kept instead if more of those items are then placed.
+     * out an item with no volume (for its placement callback, its weight or its size) and some item with no volume has
+     * a placement callback, the load moved as a whole is also tried (and its items asked about it), and is kept instead
+     * if more items with no volume are then placed.
      */
     private function materialise(BlockSearchState $state): PackedBox
     {
@@ -1807,8 +1808,9 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         // closing the gaps moves the load the flat items are placed against, so must not leave fewer of them placed
-        // than without it. Only a placement callback makes where they go depend on the load, so the load moved as a
-        // whole is only tried if one of them was left out
+        // than without it. Only a placement callback makes whether they go in depend on the load, so the load moved as
+        // a whole is only tried if one of them has a callback and any of them was left out: one whose callback accepts
+        // the closed load can take the weight that others would otherwise have had
         $loadCount = $closed->count();
         $withGapsClosed = $this->withFlatItems($state, $closed);
         $constrainedFlats = false;

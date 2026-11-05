@@ -9,9 +9,11 @@
 - Ask placement callbacks at the closed-and-balanced positions first; if refused, try the load moved as a whole,
   then keep the positions found by the search if that is refused too. Each check keeps packing order and only
   already-moved predecessors as context; exceptions propagate, no search budget is used and no move means no extra calls
-- Closing never places fewer flat items. If constrained flat items are present and the closed load leaves one out,
-  also try the load moved as a whole, including its callbacks and flat items, and keep the closed result only if it
-  places at least as many flat items. Accepting a proposed position does not guarantee an item ends up there
+- Closing never places fewer flat items (items with a zero width, length or depth). If the closed load leaves out any
+  flat item and some flat item has a placement callback, also try the load moved as a whole, including its callbacks
+  and flat items. If a callback refuses that move, compare with the positions found by the search. Keep the closed
+  result only if it places at least as many flat items. Accepting a proposed position does not guarantee an item
+  ends up there
 
 ## [4.4.3] - 2026-11-04
 v4.4.2 was withdrawn; this release replaces it.

@@ -273,8 +273,8 @@ class PackingValidatorTest extends TestCase
      * A packing in a 1000 × 1000 box with the allowance (none if null) as it was before a move and as it is after,
      * built without the box's own checks.
      *
-     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int}> $items [x, y, width, length, depth (100 if not given)] before
-     * @param  list<array{0: int, 1: int}>                          $moves [x, y] by which each item moved
+     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int, 5?: int}> $items [x, y, width, length, depth (100 if not given), z (0 if not given)] before
+     * @param  list<array{0: int, 1: int}>                                   $moves [x, y] by which each item moved
      * @return array{0: list<PackedItem>, 1: PackedBox}
      */
     private static function moved(?AllowedOverhang $allowance, array $items, array $moves): array
@@ -282,23 +282,47 @@ class PackingValidatorTest extends TestCase
         $before = $after = [];
         foreach ($items as $index => [$x, $y, $width, $length]) {
             $depth = $items[$index][4] ?? 100;
+            $z = $items[$index][5] ?? 0;
             $item = new TestItem("Item {$index}", $width, $length, $depth, 0, Rotation::Never);
             [$moveX, $moveY] = $moves[$index] ?? $moves[0];
-            $before[] = new PackedItem($item, $x, $y, 0, $width, $length, $depth);
-            $after[] = new PackedItem($item, $x + $moveX, $y + $moveY, 0, $width, $length, $depth);
+            $before[] = new PackedItem($item, $x, $y, $z, $width, $length, $depth);
+            $after[] = new PackedItem($item, $x + $moveX, $y + $moveY, $z, $width, $length, $depth);
         }
 
         return [$before, self::packedBox(self::deck($allowance), $after)];
     }
 
     /**
-     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int}> $items
-     * @param  list<array{0: int, 1: int}>                          $moves
+     * @param  list<array{0: int, 1: int, 2: int, 3: int, 4?: int, 5?: int}> $items
+     * @param  list<array{0: int, 1: int}>                                   $moves
      * @return list<string>
      */
     private static function shiftProblems(?AllowedOverhang $allowance, array $items, array $moves): array
     {
         return PackingValidator::shiftProblems(...self::moved($allowance, $items, $moves));
+    }
+
+    /**
+     * The packing, once checked to be physically possible.
+     */
+    private static function possible(PackedBox $packedBox): PackedBox
+    {
+        self::assertSame([], PackingValidator::problems($packedBox));
+
+        return $packedBox;
+    }
+
+    /**
+     * Check that a packing and the same packing moved (see {@see moved()}) are both physically possible.
+     *
+     * @param list<array{0: int, 1: int, 2: int, 3: int, 4?: int, 5?: int}> $items
+     * @param list<array{0: int, 1: int}>                                   $moves
+     */
+    private static function assertPossibleMove(?AllowedOverhang $allowance, array $items, array $moves): void
+    {
+        [$before, $after] = self::moved($allowance, $items, $moves);
+        self::possible(self::packedBox(self::deck($allowance), $before));
+        self::possible($after);
     }
 
     public function testShift(): void
@@ -389,24 +413,24 @@ class PackingValidatorTest extends TestCase
         $allowance = new AllowedOverhang(sides: 200, frontAndBack: 200);
 
         // 600 at the front, hanging 90 over it, and 300 behind it after a gap: 900 in all, which fits the 1000
-        self::assertSame(['the load hangs over 90 and -60 along y, though its items\' extents along it come to 900, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[0, -90, 500, 600], [0, 640, 500, 300]])));
+        self::assertSame(['the load hangs over 90 and -60 along y, though its items\' extents along it come to 900, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[0, -90, 500, 600], [0, 640, 500, 300]]))));
         // and the same along x
-        self::assertSame(['the load hangs over 90 and -60 along x, though its items\' extents along it come to 900, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-90, 0, 600, 500], [640, 0, 300, 500]])));
+        self::assertSame(['the load hangs over 90 and -60 along x, though its items\' extents along it come to 900, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-90, 0, 600, 500], [640, 0, 300, 500]]))));
         // closed up and on the deck
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[0, 50, 500, 600], [0, 650, 500, 300]])));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[0, 50, 500, 600], [0, 650, 500, 300]]))));
         // 600 and 480 come to 1080, more than the deck: their overhang cannot be avoided, gap or not
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-90, 0, 600, 500], [592, 0, 480, 500]])));
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-40, 0, 600, 500], [560, 0, 480, 500]])));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-90, 0, 600, 500], [592, 0, 480, 500]]))));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-40, 0, 600, 500], [560, 0, 480, 500]]))));
         // gaps, but nothing hanging over
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[0, 0, 100, 100], [500, 500, 100, 100]])));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[0, 0, 100, 100], [500, 500, 100, 100]]))));
         // touching items count once each: 400 + 600 is exactly the deck, so hanging over is avoidable
-        self::assertSame(['the load hangs over 10 and -10 along x, though its items\' extents along it come to 1000, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-10, 0, 400, 500], [390, 0, 600, 500]])));
-        // overlapping stretches (here side by side along the other axis) count once: with no gap, a load that fits the
-        // deck but hangs over could be moved onto it as a whole
-        self::assertSame(['the load hangs over 50 and -250 along x, though its items\' extents along it come to 800, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-50, 0, 500, 500], [-50, 500, 400, 500], [250, 0, 500, 500, 100]])));
+        self::assertSame(['the load hangs over 10 and -10 along x, though its items\' extents along it come to 1000, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-10, 0, 400, 500], [390, 0, 600, 500]]))));
+        // stretches that overlap count once (here items 0 and 2, side by side along the other axis, overlap from 350 to
+        // 450 along x): with no gap, a load that fits the deck but hangs over could be moved onto it as a whole
+        self::assertSame(['the load hangs over 50 and -250 along x, though its items\' extents along it come to 800, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-50, 0, 500, 500], [-50, 500, 400, 500], [350, 500, 400, 500]]))));
         // a gap between them is not counted, but one unit more of the items than the deck is not avoidable
-        self::assertSame(['the load hangs over 10 and -9 along x, though its items\' extents along it come to 1000, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-10, 0, 400, 500], [391, 0, 600, 500]])));
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[-10, 0, 400, 500], [390, 0, 601, 500]])));
+        self::assertSame(['the load hangs over 10 and -9 along x, though its items\' extents along it come to 1000, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-10, 0, 400, 500], [391, 0, 600, 500]]))));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[-10, 0, 400, 500], [390, 0, 601, 500]]))));
     }
 
     public function testAvoidableOverhangLeavesOutItemsWithNoVolume(): void
@@ -414,9 +438,9 @@ class PackingValidatorTest extends TestCase
         $allowance = new AllowedOverhang(sides: 200, frontAndBack: 200);
 
         // a sheet hanging over on its own is not part of the load, and the load fits the deck
-        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[0, 0, 1000, 1000], [-50, 0, 1100, 500, 0]])));
+        self::assertSame([], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[0, 0, 1000, 1000], [-50, 0, 1100, 500, 0]]))));
         // nor is a sheet's extent counted with the load's
-        self::assertSame(['the load hangs over 90 and -490 along y, though its items\' extents along it come to 600, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::packing($allowance, [[0, -90, 500, 600], [0, 600, 500, 400, 0]])));
+        self::assertSame(['the load hangs over 90 and -490 along y, though its items\' extents along it come to 600, which fits the deck\'s 1000'], PackingValidator::avoidableOverhangProblems(self::possible(self::packing($allowance, [[0, -90, 500, 600], [0, 600, 500, 400, 0]]))));
         // and a box without an allowed overhang has none to avoid
         $list = new PackedItemList();
         $list->insert(new PackedItem(new TestItem('Item', 100, 100, 100, 0, Rotation::Never), 0, 0, 0, 100, 100, 100));
@@ -435,7 +459,7 @@ class PackingValidatorTest extends TestCase
         $list->insert($plank);
         $list->insert($atRightEdge);
         $union = 300 + $rod->boundingWidth;
-        self::assertSame(["the load hangs over 45 and 0 along x, though its items' extents along it come to {$union}, which fits the deck's 1000"], PackingValidator::avoidableOverhangProblems(new PackedBox($box, $list)));
+        self::assertSame(["the load hangs over 45 and 0 along x, though its items' extents along it come to {$union}, which fits the deck's 1000"], PackingValidator::avoidableOverhangProblems(self::possible(new PackedBox($box, $list))));
     }
 
     public function testAvoidableOverhangOfTheMixedAcmeTrampolinesAsFound(): void
@@ -451,7 +475,7 @@ class PackingValidatorTest extends TestCase
         }
         $box = new OverhangTestBox('Pallet', 4800, 4000, 6500, 0, 4800, 4000, 6500, 1000000000, new AllowedOverhang(sides: 250, frontAndBack: 250));
 
-        self::assertSame(['the load hangs over 250 and 113 along y, though its items\' extents along it come to 3764, which fits the deck\'s 4000'], PackingValidator::avoidableOverhangProblems(new PackedBox($box, $list)));
+        self::assertSame(['the load hangs over 250 and 113 along y, though its items\' extents along it come to 3764, which fits the deck\'s 4000'], PackingValidator::avoidableOverhangProblems(self::possible(new PackedBox($box, $list))));
     }
 
     public function testShiftWithTheGapsClosed(): void
@@ -465,9 +489,13 @@ class PackingValidatorTest extends TestCase
         // moving the load as a whole is not enough
         self::assertSame(['Item 0 at 0,-90,0 was moved by 0,75, but should have been moved by 0,140', 'Item 1 at 0,640,0 was moved by 0,75, but should have been moved by 0,10'], self::shiftProblems($allowance, [[0, -90, 500, 600], [0, 640, 500, 300]], [[0, 75]]));
         // items that overlap along the axis (here one on top of the other) move together
-        self::assertSame([], self::shiftProblems($allowance, [[0, -90, 500, 600], [0, -90, 500, 600, 50], [0, 640, 500, 300]], [[0, 140], [0, 140], [0, 10]]));
+        self::assertSame([], self::shiftProblems($allowance, [[0, -90, 500, 600, 50], [0, -90, 500, 600, 50, 50], [0, 640, 500, 300]], [[0, 140], [0, 140], [0, 10]]));
         // where the load still hangs over once the gap is closed: 50 and -32, leaving 40 over each side
         self::assertSame([], self::shiftProblems($allowance, [[-90, 0, 600, 500], [592, 0, 480, 500]], [[50, 0], [-32, 0]]));
+        // each of those, before and after the right move, is physically possible
+        self::assertPossibleMove($allowance, [[0, -90, 500, 600], [0, 640, 500, 300]], [[0, 140], [0, 10]]);
+        self::assertPossibleMove($allowance, [[0, -90, 500, 600, 50], [0, -90, 500, 600, 50, 50], [0, 640, 500, 300]], [[0, 140], [0, 140], [0, 10]]);
+        self::assertPossibleMove($allowance, [[-90, 0, 600, 500], [592, 0, 480, 500]], [[50, 0], [-32, 0]]);
     }
 
     public function testShiftKeepsTheGapsWhereClosingThemWouldNotHelp(): void
@@ -480,6 +508,9 @@ class PackingValidatorTest extends TestCase
         // closing the gap of 1 would leave the larger overhang 1, as moving the load as a whole does
         self::assertSame([], self::shiftProblems($allowance, [[-40, 0, 600, 500], [561, 0, 401, 500]], [[39, 0]]));
         self::assertSame(['items were moved by different amounts: 39,0 and 38,0'], self::shiftProblems($allowance, [[-40, 0, 600, 500], [561, 0, 401, 500]], [[39, 0], [38, 0]]));
+        // each of those, before and after the right move, is physically possible
+        self::assertPossibleMove($allowance, [[-15, 0, 100, 100], [200, 0, 100, 100]], [[357, 0]]);
+        self::assertPossibleMove($allowance, [[-40, 0, 600, 500], [561, 0, 401, 500]], [[39, 0]]);
     }
 
     public function testLargeExtentFloorSupport(): void
