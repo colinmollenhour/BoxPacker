@@ -160,16 +160,19 @@ class OverhangPackerTest extends TestCase
         $item = new TestItem('ACME Trampolines', 4953, 2252, 756, 1000, Rotation::BestFit);
         $items = new ItemList();
         $items->insert($item, 16);
-        $thoroughPacker->pack($items);
-        $packItems = new ReflectionMethod(ThoroughPacker::class, 'packItems');
 
-        $first = $packItems->invoke($thoroughPacker, $pallet, array_fill(0, 16, $item));
+        // the packing returned, packed afresh (and so cached), and the same items packed again: from the cache
+        $solution = $thoroughPacker->pack($items);
+        self::assertGreaterThan(0, $factory->created, 'the first packing was packed afresh');
+        self::assertCount(1, $solution);
+        $first = $solution[0];
         $created = $factory->created;
-        $cached = $packItems->invoke($thoroughPacker, $pallet, array_fill(0, 16, $item));
+        $cached = (new ReflectionMethod(ThoroughPacker::class, 'packItems'))->invoke($thoroughPacker, $pallet, array_fill(0, 16, $item));
 
         self::assertSame($created, $factory->created, 'the second packing came from the cache');
         self::assertNotSame($first, $cached);
         self::assertSame(self::fingerprint([$first]), self::fingerprint([$cached]));
+        self::assertSame(['48x40 with overhang: 16'], self::summary([$first]));
         self::assertSame(['48x40 with overhang: 16'], self::summary([$cached]));
     }
 

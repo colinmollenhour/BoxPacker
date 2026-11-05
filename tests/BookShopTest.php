@@ -16,6 +16,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
+use function count;
 use function fclose;
 use function fgetcsv;
 use function fopen;
@@ -115,6 +116,14 @@ class BookShopTest extends TestCase
 
     public static function getSamples(): array
     {
+        return self::samples();
+    }
+
+    /**
+     * @param ?int $limit the most samples to read, the first ones (all if null)
+     */
+    public static function samples(?int $limit = null): array
+    {
         $expected = ['2D' => [], '3D' => []];
 
         $expected2DData = fopen(__DIR__ . '/data/expected.csv', 'rb');
@@ -144,6 +153,9 @@ class BookShopTest extends TestCase
         $tests = [];
         $itemData = fopen(__DIR__ . '/data/items.csv', 'rb');
         while ($data = fgetcsv($itemData, escape: '')) {
+            if (!isset($tests[$data[0]]) && $limit !== null && count($tests) >= $limit) {
+                break; // each sample's items are on consecutive lines
+            }
             if (isset($tests[$data[0]])) {
                 $tests[$data[0]]['items'][] = [
                     'qty' => (int) $data[1],

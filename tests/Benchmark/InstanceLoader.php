@@ -21,6 +21,7 @@ use Random\Randomizer;
 
 use function ceil;
 use function max;
+use function min;
 use function preg_match;
 use function range;
 use function str_starts_with;
@@ -123,13 +124,14 @@ final class InstanceLoader
     }
 
     /**
+     * @param  ?int                                                                                                                                                $limit the most instances to load, the first ones (all if null)
      * @return list<array{dataset: string, id: string, kind: string, box?: \DVDoug\BoxPacker\Box, boxes?: list<\DVDoug\BoxPacker\Box>, items: ItemList, lb?: int}>
      */
-    public static function load(string $dataset): array
+    public static function load(string $dataset, ?int $limit = null): array
     {
         if (preg_match('/^br(\d+)$/', $dataset, $m)) {
             $instances = [];
-            foreach (self::decodeInstanceFile("br{$m[1]}.txt") as [$id, $box, $items]) {
+            foreach (self::decodeInstanceFile("br{$m[1]}.txt", $limit) as [$id, $box, $items]) {
                 $instances[] = ['dataset' => $dataset, 'id' => (string) $id, 'kind' => 'single', 'box' => $box, 'items' => $items];
             }
 
@@ -138,7 +140,7 @@ final class InstanceLoader
 
         if ($dataset === 'loh-nee') {
             $instances = [];
-            foreach (self::decodeInstanceFile('loh-nee.txt') as [$id, $box, $items]) {
+            foreach (self::decodeInstanceFile('loh-nee.txt', $limit) as [$id, $box, $items]) {
                 $instances[] = ['dataset' => $dataset, 'id' => (string) $id, 'kind' => 'single', 'box' => $box, 'items' => $items];
             }
 
@@ -147,7 +149,7 @@ final class InstanceLoader
 
         if ($dataset === 'ivancic') {
             $instances = [];
-            foreach (self::decodeInstanceFile('ivancic.txt') as [$id, $box, $items]) {
+            foreach (self::decodeInstanceFile('ivancic.txt', $limit) as [$id, $box, $items]) {
                 $boxVolume = $box->getInnerWidth() * $box->getInnerLength() * $box->getInnerDepth();
                 $instances[] = [
                     'dataset' => $dataset,
@@ -169,7 +171,7 @@ final class InstanceLoader
                 default => throw new InvalidArgumentException("Unknown dataset {$dataset}"),
             };
             $instances = [];
-            foreach (BookShopTest::getSamples() as $id => $sample) {
+            foreach (BookShopTest::samples($limit) as $id => $sample) {
                 $items = new ItemList();
                 foreach ($sample['items'] as $item) {
                     $items->insert(new TestItem($item['name'], $item['width'], $item['length'], $item['depth'], $item['weight'], $rotation), $item['qty']);
@@ -181,7 +183,7 @@ final class InstanceLoader
         }
 
         if ($dataset === 'overlong') {
-            return self::overlongInstances();
+            return self::overlongInstances($limit);
         }
 
         throw new InvalidArgumentException("Unknown dataset {$dataset}");
@@ -194,7 +196,7 @@ final class InstanceLoader
      *
      * @return list<array{dataset: string, id: string, kind: string, boxes: list<\DVDoug\BoxPacker\Box>, items: ItemList}>
      */
-    private static function overlongInstances(): array
+    private static function overlongInstances(?int $limit): array
     {
         $boxes = [];
         foreach ([[300, 200, 100, 150], [400, 300, 200, 250], [500, 400, 300, 400], [600, 400, 400, 550], [800, 600, 400, 800], [1200, 800, 600, 1500]] as [$width, $length, $depth, $emptyWeight]) {
@@ -203,7 +205,7 @@ final class InstanceLoader
 
         $random = new Randomizer(new Mt19937(20260930));
         $instances = [];
-        for ($order = 1; $order <= 100; ++$order) {
+        for ($order = 1; $order <= min(100, $limit ?? 100); ++$order) {
             $items = new ItemList();
             for ($line = $random->getInt(1, 3); $line > 0; --$line) {
                 $target = $boxes[$random->getInt(0, 4)];
