@@ -6,7 +6,8 @@ changing the pallet's real footprint, called the *deck*. Entering a larger footp
 sit entirely off the real pallet, and would report utilisation and cost against that larger pallet.
 
 Overhang is off by default. A box that does not opt in, or returns two zero allowances, packs exactly as
-before. This feature concerns the edges of the box, not items overhanging other items (see `Support`_).
+before, except that an order whose total volume is too large for an ``int`` no longer makes the block search throw a
+``TypeError``. This feature concerns the edges of the box, not items overhanging other items (see `Support`_).
 
 Opting in
 ---------
@@ -76,12 +77,13 @@ ends. Every item stays within it. Depth (height) is unchanged. Small items gain 
 
 Within one box, an allowance larger than any item's cap has no further effect on where items go: the search uses only as
 much of each allowance as the largest cap among the items allows. If no item can use the allowance in any of its
-orientations (every cap rounds down to zero, leaving out items too heavy for the box and orientations that do not fit
-it even with its overhang), ``Fast`` packs the box exactly as one without an allowed overhang. Box selection and the
-thorough strategy's capacity bounds and sharing of search effort between packings use the full allowances, however.
-A very large allowance can therefore change which boxes are tried and how much search each one gets, so give
-allowances that match what the pallet can really carry. Allowances so large that the envelope's width, length or
-volume cannot be represented as an ``int`` make packing throw ``InvalidArgumentException``.
+orientations (every cap rounds down to zero, leaving out items too heavy for the box, orientations that do not fit it
+even with its overhang, and items with no volume and no placement callback that fit the deck, which go on it),
+``Fast`` packs the box exactly as one without an allowed overhang. Box selection and the thorough strategy's capacity
+bounds and sharing of search effort between packings use the full allowances, however. A very large allowance can
+therefore change which boxes are tried and how much search each one gets, so give allowances that match what the
+pallet can really carry. Allowances so large that the envelope's width, length or volume cannot be represented as an
+``int`` make packing throw ``InvalidArgumentException``.
 
 For example, an ACME Trampolines carton measures 49.53 × 22.52 × 7.56 in. On a 48 × 40 in pallet with a
 65 in maximum load height, these are the measured results for 24 cartons offered, free to rotate, with minimum
@@ -143,8 +145,9 @@ items may use, which hangs over. When a block of such an item is refused there, 
 block moved as far onto the deck as its free space allows. If nothing goes into a space that way (a block of many
 copies of one item can be too wide to move fully onto the deck, and above the floor a corner over the edge may have no
 support), blocks of items with callbacks are also tried in the part of the space over the deck, sized for it. So the
-item can still be packed on the deck. Items without callbacks are not tried there: at full support they may not stack
-at the edges of a load that callbacks kept on the deck.
+item can still be packed on the deck. A callback is asked about these positions whether or not it refused anything,
+and, like every call during the search, they count towards the search budget. Items without callbacks are not tried
+there: at full support they may not stack at the edges of a load that callbacks kept on the deck.
 
 Code that consumes :doc:`positional information<positional-information>` must handle both sides of the deck.
 
@@ -191,8 +194,9 @@ In a packing found by the block search (``Thorough``, and Fast's greedy block se
 length or depth are placed after the load and do not affect its centring. Each is placed on its own, in an
 orientation that fits the deck if it has one. One that fits the deck stays at (0, 0), so it never hangs over; one
 that needs overhang is centred within its own caps. A constrained flat item is asked at that position, possibly
-first in an empty box to choose its orientation, then with the final items already packed as context, and is
-skipped if it refuses. Fast's layer packing places such items as it always has.
+first in an empty box to choose its orientation, then with the final items already packed as context. If it refuses,
+it is asked about its other orientations in turn, those that fit the deck first, each at its own position, and is
+skipped only if it refuses them all. Fast's layer packing places such items as it always has.
 
 The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole load. ``Thorough`` packs 8 lying flat
 at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at

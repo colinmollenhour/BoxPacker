@@ -20,10 +20,11 @@ interface ConstrainedPlacementItem extends Item
      *
      * For a box with an allowed overhang ({@see OverhangBox}), an item that refuses a position at which it would hang
      * over an edge may then be asked about one further onto the inner footprint, so it can be kept from hanging over.
-     * An item may also be asked again after the search, at its proposed final position once the packing has been moved
-     * to balance its overhang, with the items packed before it (also at their proposed final positions) in the box. If
-     * it or any later item refuses, the whole packing keeps the position it was found in, so accepting is not a
-     * commitment.
+     * When nothing goes into a space, an item may also be asked about positions in the part of that space over the
+     * inner footprint, whether or not it refused anything. An item may also be asked again after the search, at its
+     * proposed final position once the packing has been moved to balance its overhang, with the items packed before it
+     * (also at their proposed final positions) in the box. If it or any later item refuses, the whole packing keeps the
+     * position it was found in, so accepting is not a commitment.
      */
     public function canBePacked(
         PackedBox $packedBox,

@@ -150,7 +150,10 @@ final readonly class OverhangBounds
 
     /**
      * Whether the item may hang over an edge: whether, in some orientation its rotation allows in which it fits the box
-     * with its overhang, its cap across an edge is above 0. If no item that can go in may, the overhang cannot be used.
+     * with its overhang, its cap across an edge is above 0. An item with no volume (a zero width, length or depth) is
+     * placed on its own, on the deck if it fits it in such an orientation, so may then hang over only if its placement
+     * callback ({@see ConstrainedPlacementItem}) refuses that. If no item that can go in may, the overhang cannot be
+     * used.
      */
     public function canHangOver(Item $item): bool
     {
@@ -162,13 +165,19 @@ final readonly class OverhangBounds
             Rotation::KeepFlat => [[$width, $length, $depth], [$length, $width, $depth]],
             Rotation::BestFit => [[$width, $length, $depth], [$length, $width, $depth], [$width, $depth, $length], [$length, $depth, $width], [$depth, $width, $length], [$depth, $length, $width]],
         };
+        $placedOnTheDeck = ($width === 0 || $length === 0 || $depth === 0) && !$item instanceof ConstrainedPlacementItem;
+        $canHangOver = false;
         foreach ($orientations as [$acrossSides, $acrossEnds, $height]) {
-            if ($height <= $this->depth && $this->fits($acrossSides, $acrossEnds) && ($this->sideCap($acrossSides) > 0 || $this->endCap($acrossEnds) > 0)) {
-                return true;
+            if ($height > $this->depth || !$this->fits($acrossSides, $acrossEnds)) {
+                continue;
             }
+            if ($placedOnTheDeck && $acrossSides <= $this->width && $acrossEnds <= $this->length) {
+                return false;
+            }
+            $canHangOver = $canHangOver || $this->sideCap($acrossSides) > 0 || $this->endCap($acrossEnds) > 0;
         }
 
-        return false;
+        return $canHangOver;
     }
 
     /**

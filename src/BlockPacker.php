@@ -214,7 +214,8 @@ class BlockPacker implements LoggerAwareInterface
     /**
      * Items with a zero dimension. They occupy no volume, so they are placed on the floor once the rest of the load has
      * been packed (and, with an allowed overhang, moved to balance it): in the corner, turned to fit the deck if one
-     * needs to be, or, if one only fits the box with its overhang, hanging over equally on its own.
+     * needs to be, or, if one only fits the box with its overhang (or its placement callback refuses it on the deck),
+     * hanging over equally on its own.
      *
      * @var list<Item>
      */
@@ -1795,32 +1796,52 @@ class BlockPacker implements LoggerAwareInterface
         $weightLeft = $state->weightLeft;
         foreach ($this->flatItems as $item) {
             $orientations = $this->buildOrientations($item);
-            $orientation = $orientations[0] ?? null;
-            if ($this->overhang !== null) {
-                // one that fits the deck, so as not to hang over if it need not: a preferred (stable) one if one does,
-                // else any (as in a box without an allowed overhang, in which only those fit)
-                foreach ([...$orientations, ...$this->fittingOrientations($item)] as $fitting) {
-                    if ($fitting[0] <= $this->deckWidth && $fitting[1] <= $this->deckLength) {
-                        $orientation = $fitting;
-                        break;
-                    }
+            $orientations = $this->overhang === null ? array_slice($orientations, 0, 1) : $this->flatOrientations($item, $orientations);
+            if ($orientations === [] || $item->getWeight() > $weightLeft) {
+                continue;
+            }
+            // the first the item's placement callback accepts, if it has one
+            foreach ($orientations as [$w, $l, $h]) {
+                // in the corner, or (if it only fits the box with its overhang) hanging over equally, on its own
+                $x = $this->overhang?->startX($w) ?? 0;
+                $y = $this->overhang?->startY($l) ?? 0;
+                if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), $x, $y, 0, $w, $l, $h)) {
+                    continue;
                 }
+                $list->insert(new PackedItem($item, $x, $y, 0, $w, $l, $h));
+                $weightLeft -= $item->getWeight();
+                break;
             }
-            if ($orientation === null || $item->getWeight() > $weightLeft) {
-                continue;
-            }
-            [$w, $l, $h] = $orientation;
-            // in the corner, or (if it only fits the box with its overhang) hanging over equally, on its own
-            $x = $this->overhang?->startX($w) ?? 0;
-            $y = $this->overhang?->startY($l) ?? 0;
-            if ($item instanceof ConstrainedPlacementItem && !$item->canBePacked(new PackedBox($this->box, $list), $x, $y, 0, $w, $l, $h)) {
-                continue;
-            }
-            $list->insert(new PackedItem($item, $x, $y, 0, $w, $l, $h));
-            $weightLeft -= $item->getWeight();
         }
 
         return new PackedBox($this->box, $list);
+    }
+
+    /**
+     * With an allowed overhang, the orientations to try for an item with no volume, best first: those that fit the deck
+     * (so that it does not hang over if it need not), preferred (stable) ones first, then any (as in a box without an
+     * allowed overhang, in which only those fit), then the other preferred ones.
+     *
+     * @param  list<array{0: int, 1: int, 2: int}> $preferred the item's orientations from buildOrientations()
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private function flatOrientations(Item $item, array $preferred): array
+    {
+        $onDeck = $others = [];
+        foreach ([...$preferred, ...$this->fittingOrientations($item)] as $orientation) {
+            $key = $orientation[0] . '|' . $orientation[1] . '|' . $orientation[2];
+            if ($orientation[0] <= $this->deckWidth && $orientation[1] <= $this->deckLength) {
+                $onDeck[$key] ??= $orientation;
+            }
+        }
+        foreach ($preferred as $orientation) {
+            $key = $orientation[0] . '|' . $orientation[1] . '|' . $orientation[2];
+            if (!isset($onDeck[$key])) {
+                $others[$key] = $orientation;
+            }
+        }
+
+        return [...array_values($onDeck), ...array_values($others)];
     }
 
     /**

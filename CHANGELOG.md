@@ -42,7 +42,8 @@ v4.4.2 was withdrawn; this release replaces it.
     or depth are placed after the load and do not affect its centring: each takes an orientation that fits the deck
     if it has one and stays at (0, 0), or is centred on its own within its caps if it needs overhang. A constrained
     one is asked at that position, possibly first in an empty box to choose its orientation, then with the final
-    items as context, and is skipped if it refuses. Fast's layer packing places them as it always has
+    items as context; if it refuses, it is asked about its other orientations in turn (those that fit the deck first),
+    and is skipped only if it refuses them all. Fast's layer packing places them as it always has
   - `getUsedWidth()` and `getUsedLength()` include the overhang and any gap before a centred load, so
     `getRemainingWidth()` and `getRemainingLength()` can be negative; for a load centred onto the deck they measure
     only the far gap. As items can take up more than the inner volume, `getUnusedVolume()` can be negative too and
@@ -58,15 +59,18 @@ Fixes to v4.4.2:
   still cannot be packed into, and `Packer` with the Thorough strategy still cannot be given one, as in v4.4.1
 - The block search no longer fails with a `TypeError` when the total volume of the items to pack is too large for an
   `int`, so a box with an allowed overhang packs such an order under Fast, and `VolumePacker` under either strategy.
-  `Packer` under Thorough still rejects such an order, as it did in v4.4.1
+  This fixes v4.4.1 too, for boxes without an allowed overhang: `VolumePacker` under Thorough, and under Fast with
+  angled placement where an item needs it, now packs such an order where v4.4.1 threw. `Packer` under Thorough still
+  rejects such an order, as it did in v4.4.1
 - In a box with an allowed overhang, an item whose `ConstrainedPlacementItem::canBePacked()` refuses positions that
   hang over the edge can now be packed on the deck, also when many copies of one item are packed together. The block
   search started such items at positions that hang over and did not try them further in, so it could leave them all
   unpacked
 - A flat item (zero width, length or depth) that fits the deck in one of its allowed orientations no longer hangs
-  over the edge
+  over the edge, unless its placement callback refuses it there
 - The Fast strategy packs a box whose allowance no item can use (the cap of every item that can go in rounds down to
-  zero) exactly as a box without an allowed overhang
+  zero, but for flat items without a placement callback that fit the deck) exactly as a box without an allowed
+  overhang
 
 ## [4.x - Unreleased] - 2026-xx-xx
 ### Added

@@ -11,6 +11,7 @@ namespace DVDoug\BoxPacker;
 
 use AssertionError;
 use DVDoug\BoxPacker\Benchmark\PackingValidator;
+use DVDoug\BoxPacker\Test\ConstrainedPlacementMaxXTestItem;
 use DVDoug\BoxPacker\Test\EdgeCaseDeckOnlyTestItem;
 use DVDoug\BoxPacker\Test\OverhangTestBox;
 use DVDoug\BoxPacker\Test\TestBox;
@@ -21,6 +22,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+use function array_unique;
 use function ini_get;
 use function sort;
 use function strlen;
@@ -91,6 +93,27 @@ class OverhangEdgeCaseTest extends TestCase
         self::assertCount(10, $packedBoxes);
         foreach ($packedBoxes as $packedBox) {
             self::assertSame([], PackingValidator::problems($packedBox));
+        }
+    }
+
+    public function testItemsWhoseTotalVolumeIsTooLargeForAnIntPackIntoABoxWithoutAnAllowedOverhangToo(): void
+    {
+        // where the block search packs them: v4.4.1 threw a TypeError here
+        $box = new TestBox('Cube', 1000000, 1000000, 1000000, 0, 1000000, 1000000, 1000000, 100000);
+        $cubes = new ItemList();
+        $cubes->insert(new TestItem('Cube', 1000000, 1000000, 1000000, 1, Rotation::BestFit), 10);
+        // 1,200,000 long, so these only fit turned at an angle; 80 of them are 9.6 × 10^18 in all
+        $boards = new ItemList();
+        $boards->insert(new TestItem('Board', 1200000, 100000, 1000000, 1, Rotation::KeepFlat), 80);
+
+        foreach ([[PackingStrategy::Thorough, $cubes, false, 1], [PackingStrategy::Fast, $boards, true, 2], [PackingStrategy::Thorough, $boards, true, 2]] as [$strategy, $items, $angled, $count]) {
+            $packer = new VolumePacker($box, $items);
+            $packer->setStrategy($strategy);
+            $packer->setAllowAngledPlacement($angled);
+            $packedBox = $packer->pack();
+
+            self::assertCount($count, $packedBox->items, $strategy->name);
+            self::assertSame([], PackingValidator::problems($packedBox), $strategy->name);
         }
     }
 
@@ -253,6 +276,24 @@ class OverhangEdgeCaseTest extends TestCase
         self::assertSame([], PackingValidator::problems($packedBox));
     }
 
+    public function testAFlatItemWhoseCallbackRefusesTheDeckIsPlacedTheWayItAccepts(): void
+    {
+        // turned to fit the deck, the sheet is at x = 0, which its callback refuses; as it is, it hangs 50 over each
+        // side, at x = -50, which it accepts. More sheets than the Thorough strategy also packs with the Fast strategy
+        // for comparison, so that only the block search can pack them
+        $sheet = new ConstrainedPlacementMaxXTestItem('Sheet', 1100, 500, 0, 1, Rotation::KeepFlat, -25);
+        $items = new ItemList();
+        $items->insert($sheet, 41);
+        $packer = new VolumePacker(new OverhangTestBox('Pallet', 1000, 1200, 100, 0, 1000, 1200, 100, 1000, new AllowedOverhang(sides: 100)), $items);
+        $packer->setStrategy(PackingStrategy::Thorough);
+
+        $packedBox = $packer->pack();
+
+        self::assertCount(41, $packedBox->items);
+        self::assertSame(['Sheet -50,0,0 1100x500x0'], array_unique(self::describe($packedBox)));
+        self::assertSame([], PackingValidator::problems($packedBox));
+    }
+
     public function testAnItemThatCannotGoInDoesNotChangeWhereTheOthersGo(): void
     {
         // the item too heavy for the box would widen the search frame by its cap (8,400 at each side, against the
@@ -300,32 +341,34 @@ class OverhangEdgeCaseTest extends TestCase
     /**
      * @return array<string, array{?Item}>
      */
-    public static function itemsThatCannotGoIn(): array
+    public static function itemsThatCannotUseTheOverhang(): array
     {
-        // each is 7 across or more, so has a cap of 1, but cannot go in the box even with its overhang
+        // each is 7 across or more, so has a cap of 1, but cannot go in the box even with its overhang, or (having no
+        // volume) goes on its own on the deck, which it fits
         return [
             'none' => [null],
             'too heavy' => [new TestItem('Too heavy', 7, 1, 1, 2000, Rotation::Never)],
             'too wide' => [new TestItem('Too wide', 20, 1, 1, 1, Rotation::Never)],
             'too tall' => [new TestItem('Too tall', 7, 1, 2, 1, Rotation::Never)],
+            'with no volume, fitting the deck' => [new TestItem('Card', 7, 0, 1, 1, Rotation::Never)],
         ];
     }
 
-    #[DataProvider('itemsThatCannotGoIn')]
-    public function testAnAllowanceThatNoItemCanUsePacksAsNoAllowance(?Item $cannotGoIn): void
+    #[DataProvider('itemsThatCannotUseTheOverhang')]
+    public function testAnAllowanceThatNoItemCanUsePacksAsNoAllowance(?Item $cannotUseIt): void
     {
-        // every item that can go in is under 7 across, so 15 % of it rounds down to 0. The layer packer puts the 5 × 5
-        // in first (25); a block search would pack the four 3 × 3 (36) instead
+        // every other item is under 7 across, so 15 % of it rounds down to 0. The layer packer puts the 5 × 5 in first
+        // (25); a block search would pack the four 3 × 3 (36) instead
         $items = new ItemList();
         $items->insert(new TestItem('Large', 5, 5, 1, 1, Rotation::Never));
         $items->insert(new TestItem('Small', 3, 3, 1, 1, Rotation::Never), 4);
-        if ($cannotGoIn !== null) {
-            $items->insert($cannotGoIn);
+        if ($cannotUseIt !== null) {
+            $items->insert($cannotUseIt);
         }
-        $box = new OverhangTestBox('Box', 6, 6, 1, 0, 6, 6, 1, 1000, new AllowedOverhang(sides: 1, frontAndBack: 1));
+        $box = new OverhangTestBox('Box', 7, 6, 1, 0, 7, 6, 1, 1000, new AllowedOverhang(sides: 1, frontAndBack: 1));
 
         foreach ([PackingStrategy::Fast, PackingStrategy::Thorough] as $strategy) {
-            $plain = new VolumePacker(new TestBox('Box', 6, 6, 1, 0, 6, 6, 1, 1000), $items);
+            $plain = new VolumePacker(new TestBox('Box', 7, 6, 1, 0, 7, 6, 1, 1000), $items);
             $plain->setStrategy($strategy);
             $packer = new VolumePacker($box, $items);
             $packer->setStrategy($strategy);
@@ -336,7 +379,7 @@ class OverhangEdgeCaseTest extends TestCase
             self::assertSame($plain->getSearchPlacements(), $packer->getSearchPlacements(), $strategy->name);
             self::assertSame([], PackingValidator::problems($packedBox));
             if ($strategy === PackingStrategy::Fast) {
-                self::assertSame(['Large 0,0,0 5x5x1'], self::describe($packedBox));
+                self::assertContains('Large 0,0,0 5x5x1', self::describe($packedBox));
             }
         }
     }
@@ -359,6 +402,14 @@ class OverhangEdgeCaseTest extends TestCase
         self::assertFalse($sides->canHangOver(new TestItem('Too wide', 20, 1, 1, 1, Rotation::Never)));
         self::assertFalse($sides->canHangOver(new TestItem('Too tall', 7, 1, 101, 1, Rotation::Never)));
         self::assertTrue($sides->canHangOver(new TestItem('Lying down', 1, 1, 7, 1, Rotation::BestFit)));
+
+        // an item with no volume goes on the deck if it fits it, unless its placement callback refuses that
+        $seven = OverhangBounds::forBox(new OverhangTestBox('Box', 7, 7, 100, 0, 7, 7, 100, 1000, new AllowedOverhang(sides: 1)));
+        self::assertNotNull($seven);
+        self::assertFalse($seven->canHangOver(new TestItem('Card', 7, 0, 1, 1, Rotation::Never)));
+        self::assertTrue($seven->canHangOver(new ConstrainedPlacementMaxXTestItem('Card', 7, 0, 1, 1, Rotation::Never, -1)));
+        self::assertTrue($seven->canHangOver(new TestItem('Card', 8, 0, 1, 1, Rotation::Never)));
+        self::assertFalse($seven->canHangOver(new TestItem('Card', 8, 0, 1, 1, Rotation::BestFit))); // standing up
     }
 
     public function testAnItemWithNoVolumeInsideAnotherFailsTheRealWorldCheckOnlyWithoutAnAllowedOverhang(): void
