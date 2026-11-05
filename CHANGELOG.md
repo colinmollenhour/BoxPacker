@@ -2,18 +2,22 @@
 
 ## [Unreleased]
 
-### Changed
-- For boxes with a non-zero allowed overhang, close holes between groups of blocks before balancing the load, on each
-  axis where centring alone would leave overhang and closing makes the larger overhang strictly smaller. Groups keep
-  their order and move rigidly, preserving support, collisions and each item's caps. The search is unchanged
-- Ask placement callbacks at the closed-and-balanced positions first; if refused, try the load moved as a whole,
-  then keep the positions found by the search if that is refused too. Each check keeps packing order and only
-  already-moved predecessors as context; exceptions propagate, no search budget is used and no move means no extra calls
+### Fixed
+Fixes to v4.4.3, for boxes with a non-zero allowed overhang only:
+- A load no longer hangs over an edge because of a hole inside it when it would fit the deck along that axis without
+  the hole. After packing, the holes between groups of blocks are closed before the load is balanced, on each axis
+  where centring alone would leave overhang and closing makes the larger overhang strictly smaller. Groups keep their
+  order and move rigidly, preserving support, collisions and each item's caps. The search is unchanged, so the items
+  packed, their volume and the search effort are too
+- Placement callbacks are asked at the closed-and-balanced positions first; if refused, the load moved as a whole is
+  tried, as in v4.4.3, and if that is refused too the positions found by the search are kept. Each check keeps packing
+  order and only already-moved predecessors as context; exceptions propagate, no search budget is used and no move
+  means no extra calls
 - Closing never places fewer flat items (items with a zero width, length or depth). If the closed load leaves out any
-  flat item and some flat item has a placement callback, also try the load moved as a whole, including its callbacks
-  and flat items. If a callback refuses that move, compare with the positions found by the search. Keep the closed
-  result only if it places at least as many flat items. Accepting a proposed position does not guarantee an item
-  ends up there
+  flat item and some flat item has a placement callback, the load moved as a whole is also tried, including its
+  callbacks and flat items; if a callback refuses that move, the positions found by the search are compared instead.
+  The closed result is kept only if it places at least as many flat items. Accepting a proposed position does not
+  guarantee an item ends up there
 
 ## [4.4.3] - 2026-11-04
 v4.4.2 was withdrawn; this release replaces it.
