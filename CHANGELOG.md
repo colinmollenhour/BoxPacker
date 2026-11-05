@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- For boxes with a non-zero allowed overhang, close holes between groups of blocks before balancing the load, on each
+  axis where centring alone would leave overhang and closing makes the larger overhang strictly smaller. Groups keep
+  their order and move rigidly, preserving support, collisions and each item's caps. The search is unchanged
+- Ask placement callbacks at the closed-and-balanced positions first; if refused, try the load moved as a whole,
+  then keep the positions found by the search if that is refused too. Each check keeps packing order and only
+  already-moved predecessors as context; exceptions propagate, no search budget is used and no move means no extra calls
+- Closing never places fewer flat items. If constrained flat items are present and the closed load leaves one out,
+  also try the load moved as a whole, including its callbacks and flat items, and keep the closed result only if it
+  places at least as many flat items. Accepting a proposed position does not guarantee an item ends up there
+
 ## [4.4.3] - 2026-11-04
 v4.4.2 was withdrawn; this release replaces it.
 

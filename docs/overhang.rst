@@ -123,7 +123,7 @@ With 1.5 in at the sides and 3 in at the front and back, 16 fit lying flat (1 ×
 
 With 1 in at the sides and 3 in at the front and back, the final positions are the same.
 With 2.5 in at each edge, two deep lying flat would need 2.52 in at each end, 0.02 in more than allowed, so the
-best uniform layout stays at 10. ``Thorough`` finds 12 by mixing orientations; see `Centring`_ for its limitation.
+best uniform layout stays at 10. ``Thorough`` finds 12 by mixing orientations; see `Centring`_ for their positions.
 ``Fast`` keeps its 10-item layer packing on the deck: its greedy block search also finds 10, and the deck-only
 packing wins the tie.
 
@@ -154,11 +154,22 @@ Code that consumes :doc:`positional information<positional-information>` must ha
 Centring
 --------
 
-After packing, the whole load is moved along each axis on which it hangs over an edge, to make the larger of its
-two overhangs on that axis as small as possible. A gap counts as a negative overhang. If two moves give the same
-result, the smaller move wins. Every item stays within its own caps at both edges, and angled items stay on the deck.
-Moving all items together preserves their support and collision relations. This balances the overhang, not the
-centre of gravity, and cannot close gaps inside the load.
+After the block search, a load with a non-zero allowance has its holes closed where this reduces overhang, then is
+balanced. On each axis, blocks whose extents overlap or touch form a group. The holes between groups are closed,
+keeping the groups in order and moving each group rigidly. Supporting items overlap on both axes, so they move together.
+Support and collision relations are preserved, every item stays within its own caps, and angled items stay on the deck.
+Closing does not change which blocks the search packs, their volume or the search effort.
+
+Balancing moves the load along each axis on which it hangs over an edge, to make the larger of its two overhangs
+on that axis as small as possible within the items' caps. A gap counts as a negative overhang. If two moves give the
+same result, the smaller move wins. This balances the overhang, not the centre of gravity.
+
+An axis uses the closed-and-balanced result only if balancing the load as a whole would still leave it hanging
+over, and closing makes the larger overhang strictly smaller. Otherwise, it uses the existing uniform move.
+Subject to the placement callbacks and flat-item rule below, if the projections of the items with volume together
+fit the deck on an axis, the load ends with no overhang on that axis. Shared stretches count once and holes do not
+count. A load that centring alone already puts on the deck is unchanged; holes inside the deck that cause no
+overhang are left alone.
 
 An axis on which nothing hangs over is not moved. Boxes that do not opt in, all-zero boxes and Fast's layer
 packing, which never overhangs, are unchanged.
@@ -169,10 +180,11 @@ moved. This happens in three cases:
 * For one box with up to 40 items, when the search leaves some out and the layer packing is at least as dense (see
   `Strategies and angled placement`_). This also applies to each box that ``Packer`` packs.
 * With ``VolumePacker::packBestSubset()``, for up to 40 items, when the search leaves some out. The packing it is
-  compared with is ``Fast``'s best subset, which can be a layer packing or a centred greedy block search.
+  compared with is ``Fast``'s best subset, which can be a layer packing or a greedy block search, with hole closing
+  and centring as above.
 * With ``Packer``, for orders of up to 200 items, when ``Fast``'s boxes for the whole order leave fewer items
   unpacked, or as many in fewer or cheaper boxes (see :doc:`Choosing the boxes<thorough>`). Each of those boxes is
-  ``Fast``'s packing: its layer packing, not moved, or its greedy block search, centred.
+  ``Fast``'s packing: its layer packing, not moved, or its greedy block search, with hole closing and centring as above.
 
 Where a load that fits the deck ends up depends on where it was found. The block search starts each block at the
 edge of the area its items may use, so a load of items that can hang over is usually found hanging over the
@@ -184,26 +196,43 @@ hanging over on one axis only is moved on that axis only. The same items can the
 depending on the strategy and on which packing was kept. For the centred cube, ``getUsedWidth()`` is 30 in,
 including the 18 in gap before it, and ``getRemainingWidth()`` is only the 18 in far gap.
 
-When the load moves, each ``ConstrainedPlacementItem`` is asked again, in packing order, at its proposed final
-position, with only its already-moved predecessors as context. On the first refusal the check stops (later items are
-not asked) and the whole load keeps the valid position the search found, which may leave its overhang unbalanced.
-This check makes no extra calls when the load does not move. A callback that counts calls sees these extra calls;
-an exception thrown during this check propagates out of ``pack()``. These calls do not use up the search budget.
+When the load moves, each ``ConstrainedPlacementItem`` is asked again at the closed-and-balanced positions first,
+if holes are closed. If one refuses, the load moved as a whole is tried, exactly as before. If one refuses that too,
+the load keeps the valid position the search found, which may leave its overhang unbalanced. At each stage, callbacks
+are asked in packing order, with only their already-moved predecessors as context. The first refusal stops that
+stage's check; later items are not asked. No move means no extra calls. A callback that counts calls sees these extra
+calls; an exception propagates out of ``pack()``. These calls do not use up the search budget.
 
 In a packing found by the block search (``Thorough``, and Fast's greedy block search), items with a zero width,
-length or depth are placed after the load and do not affect its centring. Each is placed on its own, in an
-orientation that fits the deck if it has one. One that fits the deck stays at (0, 0), so it never hangs over; one
+length or depth are placed after the load and do not affect hole closing or centring. Each is placed on its own,
+trying orientations that fit the deck first. An accepted orientation that fits the deck stays at (0, 0); an orientation
 that needs overhang is centred within its own caps. A constrained flat item is asked at that position, possibly
 first in an empty box to choose its orientation, then with the final items already packed as context. If it refuses,
 it is asked about its other orientations in turn, those that fit the deck first, each at its own position, and is
 skipped only if it refuses them all. Fast's layer packing places such items as it always has.
 
-The 2.5 / 2.5 in ACME Trampolines result shows the limit of moving the whole load. ``Thorough`` packs 8 lying flat
-at the front and 4 standing on a long edge behind them, in 2 rows stacked 2 high. Centring balances the sides at
-0.77 / 0.76 in, but the load cannot move front to back. The flat stack is at its own 2.50 in front limit, and the
-back row is at its own 1.13 in back limit (15% of its 7.56 in packed length, rounded down, as it stands on a long
-edge). The load stays 2.50 in over the front and 1.13 in over the back, with a 5.99 in gap inside it. Moving the load
-as a whole cannot close that gap.
+Closing never places fewer flat items. If constrained flat items are present and the closed load leaves one out,
+the load moved as a whole is also tried, including its placement callbacks and flat items. The closed result is kept
+only if it places at least as many flat items. Accepting a proposed position therefore does not guarantee that an
+item ends up there, even if every callback accepts the closed load.
+
+With 2.5 / 2.5 in allowances, ``Thorough`` still packs 12 ACME Trampolines cartons: 8 lying flat at the front and
+4 standing on a long edge behind them, in 2 rows stacked 2 high. The 5.99 in hole is closed and the load balanced.
+It hangs 0.77 in over the left edge and 0.76 in over the right. Front to back, it lies from y = 1.18 to 38.82 in,
+with no overhang and 1.18 in of deck free at each end. ``Fast`` keeps its 10-item layer packing.
+
+On an axis whose items' projections together do not fit the deck, a block that fits the deck on its own can still
+hang over: closing and centring move groups, not individual blocks. For example, a 600-unit block and a 480-unit
+block side by side on a 1000-unit deck with a 50-unit sides allowance span x = −40 to 1040. Each hangs over by
+40 units, below the allowance and their respective 15% limits of 90 and 72 units.
+Anchoring every block on the deck first was rejected because it loses items whose overhang is needed: only one of
+two 550-unit blocks would fit that way on the same deck.
+
+The test suite's independent ``PackingValidator::avoidableOverhangProblems()`` helper in ``tests/Benchmark/`` reports
+overhang on an axis when the union of the items' projected extents fits the deck there. It ignores zero-volume items
+and uses angled items' bounding boxes. Packings kept as found because a callback refused a move are reported
+separately. Across 929 randomly opted-in boxes, the check finds no problems, compared with 43 box-axes before this
+change. This helper is a test-suite tool, not public API.
 
 Support
 -------
