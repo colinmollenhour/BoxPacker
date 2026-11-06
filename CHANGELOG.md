@@ -72,7 +72,23 @@ Fixes to v4.4.2:
   zero, but for flat items without a placement callback that fit the deck) exactly as a box without an allowed
   overhang
 
-## [4.x - Unreleased] - 2026-xx-xx
+## [4.4.1] - 2026-10-02
+### Changed
+- Thorough results can differ slightly on some instances, because spaces that placement callbacks refused are now
+  offered again once nothing else can be filled
+
+### Fixed
+- The thorough strategy no longer drops `ConstrainedPlacementItem`s whose callbacks refuse part of a block: the block
+  is cut to the part that was accepted. With more than 40 identical constrained items it could pack nothing at all
+- The thorough strategy honours the search budget, the time limit and the `TimeoutChecker` at every level of the
+  search. Once time is up, it skips the fast comparison and weight redistribution
+- If packing fails part way through, the thorough strategy leaves the items and the box quantities as they were
+- The thorough strategy no longer returns the same `PackedBox` twice in one solution, and no longer fails when it keeps
+  the fast strategy's result
+- `Packer::pack()` no longer fails with an `Error` when the boxes were passed to the `Packer` constructor rather than
+  added with `addBox()` or `setBoxes()`
+
+## [4.4.0] - 2026-10-01
 ### Added
 - `VolumePacker::packBestSubset()` for the single-container “fill this box as densely as possible” problem (leftover items are expected)
 - New `PackingStrategy::Thorough`, selected with `setStrategy()`: a block-building beam search over maximal free spaces
@@ -101,8 +117,6 @@ Fixes to v4.4.2:
 - `VolumePacker::pack()` no longer fails when given an empty item list
 - The fast strategy no longer gives a `KeepFlat` or `Never`-rotation item the orientation of a preceding item of the
   same size when that orientation is not allowed for it
-- `Packer::pack()` no longer fails with an `Error` when the boxes were passed to the `Packer` constructor rather than
-  added with `addBox()` or `setBoxes()`
 
 ## [4.3.0] - 2026-08-09
 ### Changed
@@ -702,7 +716,9 @@ Initial release
  - Experimental code to get a feel for how calculations can best be implemented
  - Only works if all items fit into a single box (so not production ready at all)
 
-[4.x - Unreleased]: https://github.com/dvdoug/BoxPacker/compare/4.3.0..master
+[4.4.3]: https://github.com/colinmollenhour/BoxPacker/compare/v4.4.1...v4.4.3
+[4.4.1]: https://github.com/colinmollenhour/BoxPacker/compare/v4.4.0...v4.4.1
+[4.4.0]: https://github.com/dvdoug/BoxPacker/compare/4.3.0...colinmollenhour:BoxPacker:v4.4.0
 
 [4.3.0]: https://github.com/dvdoug/BoxPacker/compare/4.2.0..4.3.0
 [4.2.0]: https://github.com/dvdoug/BoxPacker/compare/4.1.1..4.2.0
