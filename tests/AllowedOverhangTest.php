@@ -22,6 +22,8 @@ use function array_fill;
 use function array_map;
 use function array_merge;
 use function count;
+use function ini_get;
+use function ini_set;
 use function intdiv;
 use function iterator_to_array;
 use function json_encode;
@@ -489,6 +491,33 @@ class AllowedOverhangTest extends TestCase
         self::assertTrue($bounds->admitsPackedItem($movedRod));
         self::assertGreaterThanOrEqual(0, $plank->x + $plankMove);
         self::assertSame(intdiv(1000 - 300 - $rod->boundingWidth, 2), $plank->x + $plankMove); // balanced: the odd unit at the right
+    }
+
+    public function testClosingLeavesALoadBeyondItsCapsWhereItIs(): void
+    {
+        // 600 (cap 90) at its cap at the left and 480 (cap 72) one past its cap at the right: centringShift() leaves
+        // such a packing where it is, and so must closing, though closing the gap of 83 would lessen its overhang. A
+        // packing beyond its caps fails an assertion, so they are turned off for this, if they can be (they cannot be
+        // turned on or off if compiled out)
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
+        $item = static fn (int $x, int $width): PackedItem => new PackedItem(new Test\TestItem('Item', $width, 500, 100, 1, Rotation::Never), $x, 0, 0, $width, 500, 100);
+        $assertions = ini_get('zend.assertions');
+        if ($assertions === '1') {
+            ini_set('zend.assertions', '0');
+        }
+        try {
+            [$alongX] = $bounds->closingMoves([[$item(-90, 600)], [$item(593, 480)]]);
+            $shift = $bounds->centringShift([$item(-90, 600), $item(593, 480)]);
+        } finally {
+            if ($assertions === '1') {
+                ini_set('zend.assertions', '1');
+            }
+        }
+
+        self::assertSame([0, 0], $shift);
+        self::assertSame(83, $alongX['gap']);
+        self::assertFalse($alongX['closed']);
+        self::assertSame([0, 0], $alongX['moves']);
     }
 
     public function testStartPositionsHangOverEquallyWhenTheyMust(): void

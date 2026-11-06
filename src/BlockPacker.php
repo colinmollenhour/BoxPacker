@@ -1783,9 +1783,9 @@ class BlockPacker implements LoggerAwareInterface
      * as far as it fits there and to balance its overhang, as far as the items' placement callbacks accept: with the
      * gaps in the load closed where that lessens its overhang (see {@see OverhangBounds::closingMoves()}), else moved
      * as a whole (see {@see OverhangBounds::centringShift()}), else as found. If the load with its gaps closed leaves
-     * out an item with no volume (for its placement callback, its weight or its size) and some item with no volume has
-     * a placement callback, the load moved as a whole is also tried (and its items asked about it), and is kept instead
-     * if more items with no volume are then placed.
+     * out an item with no volume that could go in this box (for its placement callback or the weight the others took)
+     * and some item with no volume has a placement callback, the load moved as a whole is also tried (and its items
+     * asked about it), and is kept instead if more items with no volume are then kept (see {@see keptFlatItems()}).
      */
     private function materialise(BlockSearchState $state): PackedBox
     {
@@ -1807,25 +1807,33 @@ class BlockPacker implements LoggerAwareInterface
             return $this->withFlatItems($state, $centred);
         }
 
-        // closing the gaps moves the load the flat items are placed against, so must not leave fewer of them placed
-        // than without it. Only a placement callback makes whether they go in depend on the load, so the load moved as
-        // a whole is only tried if one of them has a callback and any of them was left out: one whose callback accepts
-        // the closed load can take the weight that others would otherwise have had
+        // closing the gaps moves the load the flat items are placed against, so must not leave fewer of them kept than
+        // without it. Only a placement callback makes whether they go in depend on the load, so the load moved as a
+        // whole is only tried if one of them has a callback and any of them that could go in this box was left out:
+        // one whose callback accepts the closed load can take the weight that others would otherwise have had. One with
+        // no orientation that fits (flatOrientations() tries every one), or heavier than the weight the load leaves, is
+        // left out whatever the load
         $loadCount = $closed->count();
         $withGapsClosed = $this->withFlatItems($state, $closed);
         $constrainedFlats = false;
+        $placeable = 0;
         foreach ($this->flatItems as $item) {
             $constrainedFlats = $constrainedFlats || $item instanceof ConstrainedPlacementItem;
+            if ($this->fittingOrientations($item) !== [] && $item->getWeight() <= $state->weightLeft) {
+                ++$placeable;
+            }
         }
-        if (!$constrainedFlats || $withGapsClosed->items->count() === $loadCount + count($this->flatItems)) {
+        if (!$constrainedFlats || $withGapsClosed->items->count() === $loadCount + $placeable) {
             $this->logger->debug('Overhang finalised', ['stage' => 'gaps closed']);
 
             return $withGapsClosed;
         }
         $centred = $this->centred($state, $list, true);
         $without = $this->withFlatItems($state, $centred);
-        if ($withGapsClosed->items->count() < $without->items->count()) {
-            $this->logger->debug('Overhang gaps not closed: fewer flat items would be placed', ['withGapsClosed' => $withGapsClosed->items->count(), 'without' => $without->items->count()]);
+        $keptWithGapsClosed = $this->keptFlatItems($withGapsClosed);
+        $keptWithout = $this->keptFlatItems($without);
+        if ($keptWithGapsClosed < $keptWithout) {
+            $this->logger->debug('Overhang gaps not closed: fewer flat items would be kept', ['withGapsClosed' => $keptWithGapsClosed, 'without' => $keptWithout]);
             $this->logger->debug('Overhang finalised', ['stage' => $centred === $list ? 'as found' : 'balanced']);
 
             return $without;
@@ -1836,15 +1844,16 @@ class BlockPacker implements LoggerAwareInterface
     }
 
     /**
-     * The packed box of these items (those of a finished search, as finally placed) with the items that have no volume
-     * placed on the floor after them, as far as the weight left and their placement callbacks allow.
+     * The packed box of these items (those of a finished search, at the positions of one stage of finalising it, see
+     * {@see materialise()}) with the items that have no volume placed on the floor after them, as far as the weight
+     * left and their placement callbacks allow. A callback is asked with that stage's items, which may then be passed
+     * over for another stage.
      */
     private function withFlatItems(BlockSearchState $state, PackedItemList $list): PackedBox
     {
         $weightLeft = $state->weightLeft;
         foreach ($this->flatItems as $item) {
-            $orientations = $this->buildOrientations($item);
-            $orientations = $this->overhang === null ? array_slice($orientations, 0, 1) : $this->flatOrientations($item, $orientations);
+            $orientations = $this->flatItemOrientations($item);
             if ($orientations === [] || $item->getWeight() > $weightLeft) {
                 continue;
             }
@@ -1863,6 +1872,55 @@ class BlockPacker implements LoggerAwareInterface
         }
 
         return new PackedBox($this->box, $list);
+    }
+
+    /**
+     * The orientations to try for an item with no volume, best first: the first of its orientations without an allowed
+     * overhang, else as {@see flatOrientations()}.
+     *
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private function flatItemOrientations(Item $item): array
+    {
+        $orientations = $this->buildOrientations($item);
+
+        return $this->overhang === null ? array_slice($orientations, 0, 1) : $this->flatOrientations($item, $orientations);
+    }
+
+    /**
+     * How many items with no volume in this packed box would be kept once linked item groups are enforced, as far as
+     * this packer can tell: one that is not a {@see LinkedItem} counts, and one that is counts only if every item with
+     * no volume of its group given to this packer is in the box. The items with volume are the same in every stage of
+     * finalising, so only the items with no volume can complete a group in one stage and split it in another, and a
+     * split group is taken out of the box whole (see {@see LinkedItemGroupEnforcer}).
+     */
+    private function keptFlatItems(PackedBox $packedBox): int
+    {
+        $offered = [];
+        foreach ($this->flatItems as $item) {
+            if ($item instanceof LinkedItem) {
+                $offered[$item->getLinkedItemGroup()] = ($offered[$item->getLinkedItemGroup()] ?? 0) + 1;
+            }
+        }
+        $kept = 0;
+        $placed = [];
+        foreach ($packedBox->items->asItemArray() as $item) {
+            if ($item->getWidth() !== 0 && $item->getLength() !== 0 && $item->getDepth() !== 0) {
+                continue;
+            }
+            if ($item instanceof LinkedItem) {
+                $placed[$item->getLinkedItemGroup()] = ($placed[$item->getLinkedItemGroup()] ?? 0) + 1;
+            } else {
+                ++$kept;
+            }
+        }
+        foreach ($placed as $group => $count) {
+            if ($count === $offered[$group]) {
+                $kept += $count;
+            }
+        }
+
+        return $kept;
     }
 
     /**
@@ -1930,8 +1988,8 @@ class BlockPacker implements LoggerAwareInterface
 
     /**
      * The items of a finished search (as placed, in $list) moved to balance their overhang, or as placed if they need no
-     * move or a placement callback refuses an item's new position. $forComparison: only to compare with the load with
-     * its gaps closed (as the logs say), not as the outcome.
+     * move or a placement callback refuses an item's new position. $forComparison: worked out to compare with the load
+     * with its gaps closed (as the logs say), and kept only if more items with no volume are then kept.
      */
     private function centred(BlockSearchState $state, PackedItemList $list, bool $forComparison = false): PackedItemList
     {

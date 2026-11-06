@@ -388,7 +388,8 @@ final readonly class OverhangBounds
         $asFound = self::loadReach($reaches, []);
         $shift = self::shift($span, ...$asFound);
         $moves = array_fill(0, count($reaches), $shift);
-        if ($gap > 0) {
+        // a packing beyond its caps as found is not moved (as shift() does not move it), so its gaps are not closed
+        if ($gap > 0 && $asFound[2] <= 0 && $asFound[3] >= 0) {
             $closed = self::loadReach($reaches, $closing);
             $closedShift = self::shift($span, ...$closed);
             // the larger overhang balanced as found, and with the gaps closed

@@ -37,5 +37,5 @@ A :ref:`visualiser<visualiser>` is also available.
 
 For a box with :doc:`allowed overhang<overhang>`, the origin stays at the deck's left-front corner: x or y can be
 negative, and an item can end past the inner width or length. Positions reflect any moves to close holes and balance
-the load's overhang. Placement callbacks must accept the moves, and closing must not place fewer flat items
+the load's overhang. Placement callbacks must accept the moves, and closing must not keep fewer flat items
 (see :doc:`overhang`).

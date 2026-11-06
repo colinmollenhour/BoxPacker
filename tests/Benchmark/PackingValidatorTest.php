@@ -381,6 +381,12 @@ class PackingValidatorTest extends TestCase
 
         self::assertSame(['the load was beyond its limits along x before the move'], self::shiftProblems($allowance, [[-101, 0, 1200, 1000]], [[0, 0]]));
         self::assertSame(['the load was beyond its limits along x before the move', 'the load was moved by 1,0, but should have been moved by 0,0'], self::shiftProblems($allowance, [[-101, 0, 1200, 1000]], [[1, 0]]));
+
+        // nor are its gaps closed: 600 (cap 90) at its cap at the left and 480 (cap 72) one past its cap at the right,
+        // with a gap of 83 between them, which closing would have moved by 50 and -33
+        $twoGroups = [[-90, 0, 600, 500], [593, 500, 480, 500]];
+        self::assertSame(['the load was beyond its limits along x before the move'], self::shiftProblems($allowance, $twoGroups, [[0, 0], [0, 0]]));
+        self::assertSame(['the load was beyond its limits along x before the move', 'items were moved by different amounts: 50,0 and -33,0'], self::shiftProblems($allowance, $twoGroups, [[50, 0], [-33, 0]]));
     }
 
     public function testShiftMovesTheWholeLoad(): void
@@ -452,8 +458,9 @@ class PackingValidatorTest extends TestCase
         $box = new OverhangTestBox('Box', 1000, 1000, 100, 0, 1000, 1000, 100, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
         $plank = new PackedItem(new TestItem('Plank', 300, 100, 100, 0, Rotation::Never), -45, 0, 0, 300, 100, 100);
         $rod = new PackedItem(new TestItem('Rod', 600, 50, 100, 0, Rotation::KeepFlat), 0, 0, 0, 600, 50, 100, 30.0);
-        // the rod's bounding box is wider than its 600 × 50 would be square, but plank and rod still fit the deck
+        // at 30°, the rod's bounding box (about 545 wide) is narrower than its 600, and plank and rod fit the deck
         self::assertGreaterThan(500, $rod->boundingWidth);
+        self::assertLessThan(600, $rod->boundingWidth);
         $atRightEdge = new PackedItem($rod->item, 1000 - $rod->boundingWidth, 200, 0, 600, 50, 100, 30.0);
         $list = new PackedItemList();
         $list->insert($plank);
@@ -468,10 +475,10 @@ class PackingValidatorTest extends TestCase
         // 43.63", which does not fit the 40" deck, but the items come to 22.52" + 2 × 7.56" = 37.64", which does
         $list = new PackedItemList();
         foreach ([0, 756, 1512, 2268, 3024, 3780, 4536, 5292] as $z) {
-            $list->insert(new PackedItem(new TestItem('Flat', 4953, 2252, 756, 0, Rotation::BestFit), -77, -250, $z, 4953, 2252, 756));
+            $list->insert(new PackedItem(new TestItem('Flat', 4953, 2252, 756, 0, Rotation::BestFit), -250, -250, $z, 4953, 2252, 756));
         }
         foreach ([[2601, 0], [3357, 0], [2601, 2252], [3357, 2252]] as [$y, $z]) {
-            $list->insert(new PackedItem(new TestItem('On edge', 4953, 2252, 756, 0, Rotation::BestFit), -77, $y, $z, 4953, 756, 2252));
+            $list->insert(new PackedItem(new TestItem('On edge', 4953, 2252, 756, 0, Rotation::BestFit), -250, $y, $z, 4953, 756, 2252));
         }
         $box = new OverhangTestBox('Pallet', 4800, 4000, 6500, 0, 4800, 4000, 6500, 1000000000, new AllowedOverhang(sides: 250, frontAndBack: 250));
 

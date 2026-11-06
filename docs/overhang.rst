@@ -170,7 +170,8 @@ over, and closing makes the larger overhang strictly smaller. Otherwise, it uses
 Subject to the placement callbacks and flat-item rule below, if the projections of the items with volume together
 fit the deck on an axis, the load ends with no overhang on that axis. Shared stretches count once and holes do not
 count. On an axis where centring alone puts the load on the deck, it uses that uniform move and leaves its holes
-open. Holes inside the deck that cause no overhang are left alone.
+open. On an axis where holes are closed, every hole between groups is closed, including holes inside the deck. A
+load already beyond its caps as found is not moved.
 
 An axis on which nothing hangs over is not moved. Boxes that do not opt in, all-zero boxes and Fast's layer
 packing, which never overhangs, are unchanged.
@@ -209,17 +210,20 @@ length or depth (flat items) are not part of the load: their extents are not cou
 and they are placed after the load (see below for when they decide which move is kept). Each is placed on its own,
 trying orientations that fit the deck first. An accepted orientation that fits the deck stays at (0, 0);
 an orientation that needs overhang is centred within its own caps. A flat item with a placement callback is asked at
-that position, possibly first in an empty box to choose its orientation, then with the final items already packed
-as context. If it refuses, it is asked about its other orientations in turn, those that fit the deck first, each at
-its own position. An item is skipped if no orientation fits, there is too little weight left, or its callback
-refuses every orientation tried. Fast's layer packing places such items as it always has.
+that position, possibly first in an empty box to choose its orientation, then with the load of the stage being
+tried already packed as context (that load may then not be kept, see below). If it refuses, it is asked about its
+other orientations in turn, those that fit the deck first, each at its own position. An item is skipped if no
+orientation fits, there is too little weight left, or its callback refuses every orientation tried. Fast's layer
+packing places such items as it always has.
 
-Closing never places fewer flat items. If the closed load leaves out any flat item and some flat item has a
-placement callback, the load moved as a whole is also tried, including its placement callbacks and flat items.
-The omitted item need not have a callback: accepting one flat item can use weight that others need. If a callback
-refuses the load moved as a whole, the comparison uses the positions found by the search. The closed result is kept
-only if it places at least as many flat items. Accepting a proposed position therefore does not guarantee that an
-item ends up there, even if every callback accepts the closed load.
+Closing never keeps fewer flat items. If the closed load leaves out a flat item that could go in the box and some
+flat item has a placement callback, the load moved as a whole is also tried, including its placement callbacks and
+flat items. The omitted item need not have a callback: accepting one flat item can use weight that others need. A
+flat item with no orientation that fits, or heavier than the weight the load leaves, does not start the comparison.
+If a callback refuses the load moved as a whole, the comparison uses the positions found by the search. The closed
+result is kept only if it keeps at least as many flat items. A flat item in a linked item group counts only if
+every flat item of its group is placed, as a split group is later taken out of the box whole. Accepting a proposed
+position therefore does not guarantee that an item ends up there, even if every callback accepts the closed load.
 
 With 2.5 / 2.5 in allowances, ``Thorough`` still packs 12 ACME Trampolines cartons: 8 lying flat at the front and
 4 standing on a long edge behind them, in 2 rows stacked 2 high. The 5.99 in hole is closed and the load balanced.
@@ -232,14 +236,14 @@ hang over: closing and centring move groups, not individual blocks. For example,
 block in another row behind it ends at x = −25 to 575. Their extents overlap along x, so they form one group on
 that axis and move together. The 600-unit block would fit the deck on its own but still hangs 25 units over the
 left edge. ``Thorough`` and ``Fast`` give the same result.
-Anchoring every block on the deck first was rejected because it loses items whose overhang is needed: only one of
-two 550-unit blocks would fit that way on the same deck.
+Anchoring every block on the deck first was rejected because it loses items whose overhang is needed: on a 1000 × 500
+deck with a 50-unit sides allowance, only one of two 550 × 500 blocks would fit that way.
 
 The test suite's independent ``PackingValidator::avoidableOverhangProblems()`` helper in ``tests/Benchmark/`` reports
 overhang on an axis when the union of the items' projected extents fits the deck there. It ignores zero-volume items
 and uses angled items' bounding boxes. It must not be used for a packing that kept its position because a placement
-callback refused a moved one; the tests assert those cases separately. This helper is a test-suite tool, not public
-API.
+callback refused a moved one, or that kept the load moved as a whole because it kept more flat items; the tests
+assert those cases separately. This helper is a test-suite tool, not public API.
 
 Support
 -------
