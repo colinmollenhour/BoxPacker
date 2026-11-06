@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [4.5.0] - 2026-11-05
 
 ### Fixed
 Fixes to v4.4.3, for boxes with a non-zero allowed overhang only:
