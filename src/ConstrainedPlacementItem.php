@@ -22,9 +22,13 @@ interface ConstrainedPlacementItem extends Item
      * over an edge may then be asked about one further onto the inner footprint, so it can be kept from hanging over.
      * When nothing goes into a space, an item may also be asked about positions in the part of that space over the
      * inner footprint, whether or not it refused anything. An item may also be asked again after the search, at its
-     * proposed final position once the packing has been moved to balance its overhang, with the items packed before it
-     * (also at their proposed final positions) in the box. If it or any later item refuses, the whole packing keeps the
-     * position it was found in, so accepting is not a commitment.
+     * proposed final position once the packing has been moved to keep it on the inner footprint and balance its
+     * overhang, with the items packed before it (also at their proposed final positions) in the box: first with the
+     * gaps in the load closed (where closing them lessens its overhang), and if it or any later item refuses that, with
+     * the load moved as a whole. If it or any later item refuses that too, the whole packing keeps the position it was
+     * found in, so accepting is not a commitment. Nor is it if, with the gaps closed, any item with no volume is left
+     * out while some item with no volume has a placement callback: the load moved as a whole may then be asked about
+     * too, after the closed one was accepted.
      */
     public function canBePacked(
         PackedBox $packedBox,

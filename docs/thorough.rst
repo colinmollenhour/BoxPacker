@@ -57,8 +57,9 @@ fill, in case a callback that depends on what is already in the box now accepts.
 
 For boxes with :doc:`allowed overhang<overhang>`, the search uses the wider envelope and applies each item's
 per-edge cap at every height; volume utilisation and default cost still use the real deck. After the search, a
-load hanging over an edge is moved as a whole to balance its overhang within those caps, subject to placement
-callbacks accepting the new positions. A load found entirely on the deck is not moved. Where the fast packer's
+load hanging over an edge has holes closed where that reduces overhang that centring alone would leave, then is
+balanced within those caps. Placement callbacks must accept the moves, and closing must not keep fewer flat items
+(see :doc:`overhang`). A load found entirely on the deck is not moved. Where the fast packer's
 packing is kept instead (above, and in `Choosing the boxes`_), it can be its layer packing on the deck, which is not
 moved either (see :doc:`overhang`).
 

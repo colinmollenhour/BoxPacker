@@ -11,10 +11,16 @@ namespace DVDoug\BoxPacker;
 
 use InvalidArgumentException;
 
+use function array_column;
+use function array_fill;
+use function array_keys;
+use function array_map;
 use function assert;
+use function count;
 use function intdiv;
 use function max;
 use function min;
+use function usort;
 
 use const PHP_INT_MAX;
 use const PHP_INT_MIN;
@@ -249,27 +255,47 @@ final readonly class OverhangBounds
      */
     public function centringShift(iterable $items): array
     {
-        $minX = $minY = PHP_INT_MAX;
-        $maxX = $maxY = $loX = $loY = PHP_INT_MIN;
-        $hiX = $hiY = PHP_INT_MAX;
-        foreach ($items as $item) {
-            [$capX, $capY] = $item->isAngled() ? [0, 0] : [$this->sideCap($item->width), $this->endCap($item->length)];
-            $x2 = $item->x + $item->boundingWidth;
-            $y2 = $item->y + $item->boundingLength;
-            $minX = min($minX, $item->x);
-            $minY = min($minY, $item->y);
-            $maxX = max($maxX, $x2);
-            $maxY = max($maxY, $y2);
-            $loX = max($loX, -$capX - $item->x);
-            $loY = max($loY, -$capY - $item->y);
-            $hiX = min($hiX, $this->width + $capX - $x2);
-            $hiY = min($hiY, $this->length + $capY - $y2);
-        }
-        if ($minX === PHP_INT_MAX) {
+        $reach = $this->reach($items);
+        if ($reach === null) {
             return [0, 0];
         }
 
-        return [self::shift($this->width, $minX, $maxX, $loX, $hiX), self::shift($this->length, $minY, $maxY, $loY, $hiY)];
+        return [self::shift($this->width, ...$reach[0]), self::shift($this->length, ...$reach[1])];
+    }
+
+    /**
+     * How far to move each of some groups of items (in the deck's frame, each group moving as one) along x and along y
+     * to keep the load on the deck as far as it fits there, closing the gaps within it where the load hangs over.
+     *
+     * Along each axis, groups whose extents (by their items' bounding boxes) overlap or touch form one part of the
+     * load. The gaps between the parts are closed, keeping the parts in order, and the closed load is then balanced as
+     * {@see centringShift()} balances a packing. That is done only on an axis on which the load would still hang over
+     * an edge if it were balanced as it is, and only if closing the gaps makes the larger of its two overhangs there
+     * smaller: on any other axis (as on one with no gaps), every group gets the move centringShift() gives the load.
+     *
+     * Items that touch one another (as an item and those supporting it do) overlap or touch along both axes, so are in
+     * the same part along each, and move together; parts stay apart. A part moved to close a gap starts no lower than
+     * the first part ends, which is past the low edge (no item can lie wholly beyond an edge), and ends no higher than
+     * it did, so every item is still within its caps (items at an angle within the deck) before the closed load is
+     * balanced.
+     *
+     * Returned along x and along y: each group's move (by its index), the total length of the gaps between the parts as
+     * found, whether they are closed, and the parts as found, as [start, end, move] (if not closed, the whole load as
+     * one part).
+     *
+     * @param  list<iterable<PackedItem>>                                                                        $groups each non-empty
+     * @return list<array{moves: list<int>, gap: int, closed: bool, parts: list<array{0: int, 1: int, 2: int}>}> along x and along y
+     */
+    public function closingMoves(array $groups): array
+    {
+        $reaches = [];
+        foreach ($groups as $group) {
+            $reach = $this->reach($group);
+            assert($reach !== null);
+            $reaches[] = $reach;
+        }
+
+        return [self::closingMovesAlong($this->width, array_column($reaches, 0)), self::closingMovesAlong($this->length, array_column($reaches, 1))];
     }
 
     /**
@@ -291,6 +317,117 @@ final readonly class OverhangBounds
     public function envelopeVolume(): int
     {
         return $this->envelopeWidth() * $this->envelopeLength() * $this->depth;
+    }
+
+    /**
+     * Where some items reach along x and along y: [lowest start, highest end, most negative move, most positive move]
+     * on each, the moves being the furthest the items can go with every one within its caps (null for no items).
+     *
+     * @param  iterable<PackedItem>                                                                           $items
+     * @return array{0: array{0: int, 1: int, 2: int, 3: int}, 1: array{0: int, 1: int, 2: int, 3: int}}|null
+     */
+    private function reach(iterable $items): ?array
+    {
+        $minX = $minY = PHP_INT_MAX;
+        $maxX = $maxY = $loX = $loY = PHP_INT_MIN;
+        $hiX = $hiY = PHP_INT_MAX;
+        foreach ($items as $item) {
+            [$capX, $capY] = $item->isAngled() ? [0, 0] : [$this->sideCap($item->width), $this->endCap($item->length)];
+            $x2 = $item->x + $item->boundingWidth;
+            $y2 = $item->y + $item->boundingLength;
+            $minX = min($minX, $item->x);
+            $minY = min($minY, $item->y);
+            $maxX = max($maxX, $x2);
+            $maxY = max($maxY, $y2);
+            $loX = max($loX, -$capX - $item->x);
+            $loY = max($loY, -$capY - $item->y);
+            $hiX = min($hiX, $this->width + $capX - $x2);
+            $hiY = min($hiY, $this->length + $capY - $y2);
+        }
+        if ($minX === PHP_INT_MAX) {
+            return null;
+        }
+
+        return [[$minX, $maxX, $loX, $hiX], [$minY, $maxY, $loY, $hiY]];
+    }
+
+    /**
+     * {@see closingMoves()} along one axis of the given span, given where each group reaches along it (see
+     * {@see reach()}).
+     *
+     * @param  list<array{0: int, 1: int, 2: int, 3: int}>                                                 $reaches
+     * @return array{moves: list<int>, gap: int, closed: bool, parts: list<array{0: int, 1: int, 2: int}>}
+     */
+    private static function closingMovesAlong(int $span, array $reaches): array
+    {
+        if ($reaches === []) {
+            return ['moves' => [], 'gap' => 0, 'closed' => false, 'parts' => []];
+        }
+
+        // the parts, from the lowest start up (of groups starting at the same place, the first first), and the move
+        // closing the gaps before each gives every group in it
+        $order = array_keys($reaches);
+        usort($order, static fn (int $a, int $b): int => [$reaches[$a][0], $a] <=> [$reaches[$b][0], $b]);
+        $closing = [];
+        $parts = [];
+        $gap = 0;
+        $end = PHP_INT_MIN;
+        foreach ($order as $group) {
+            [$start, $groupEnd] = $reaches[$group];
+            if ($parts === [] || $start > $end) {
+                if ($parts !== []) {
+                    $gap += $start - $end;
+                }
+                $parts[] = [$start, $groupEnd, -$gap];
+            }
+            $end = max($end, $groupEnd);
+            $parts[count($parts) - 1][1] = $end;
+            $closing[$group] = -$gap;
+        }
+
+        $asFound = self::loadReach($reaches, []);
+        $shift = self::shift($span, ...$asFound);
+        $moves = array_fill(0, count($reaches), $shift);
+        // a packing beyond its caps as found is not moved (as shift() does not move it), so its gaps are not closed
+        if ($gap > 0 && $asFound[2] <= 0 && $asFound[3] >= 0) {
+            $closed = self::loadReach($reaches, $closing);
+            $closedShift = self::shift($span, ...$closed);
+            // the larger overhang balanced as found, and with the gaps closed
+            $larger = max(-$asFound[0] - $shift, $asFound[1] + $shift - $span);
+            $closedLarger = max(-$closed[0] - $closedShift, $closed[1] + $closedShift - $span);
+            if ($larger > 0 && $closedLarger < $larger) {
+                foreach ($closing as $group => $move) {
+                    $moves[$group] = $move + $closedShift;
+                }
+
+                return ['moves' => $moves, 'gap' => $gap, 'closed' => true, 'parts' => array_map(static fn (array $part): array => [$part[0], $part[1], $part[2] + $closedShift], $parts)];
+            }
+        }
+
+        return ['moves' => $moves, 'gap' => $gap, 'closed' => false, 'parts' => [[$asFound[0], $asFound[1], $shift]]];
+    }
+
+    /**
+     * Where groups reach along an axis once each is moved by the given amount (none if not given), as one load: [lowest
+     * start, highest end, most negative move, most positive move].
+     *
+     * @param  list<array{0: int, 1: int, 2: int, 3: int}> $reaches
+     * @param  array<int, int>                             $moves
+     * @return array{0: int, 1: int, 2: int, 3: int}
+     */
+    private static function loadReach(array $reaches, array $moves): array
+    {
+        $min = $hi = PHP_INT_MAX;
+        $max = $lo = PHP_INT_MIN;
+        foreach ($reaches as $group => [$start, $end, $groupLo, $groupHi]) {
+            $move = $moves[$group] ?? 0;
+            $min = min($min, $start + $move);
+            $max = max($max, $end + $move);
+            $lo = max($lo, $groupLo - $move);
+            $hi = min($hi, $groupHi - $move);
+        }
+
+        return [$min, $max, $lo, $hi];
     }
 
     /**

@@ -18,7 +18,12 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+use function array_fill;
 use function array_map;
+use function array_merge;
+use function count;
+use function ini_get;
+use function ini_set;
 use function intdiv;
 use function iterator_to_array;
 use function json_encode;
@@ -224,6 +229,7 @@ class AllowedOverhangTest extends TestCase
         self::assertCount(4, $packedBox->items);
         self::assertSame([], Benchmark\PackingValidator::problems($packedBox));
         self::assertSame([], Benchmark\PackingValidator::centringProblems($packedBox));
+        self::assertSame([], Benchmark\PackingValidator::avoidableOverhangProblems($packedBox));
         self::assertSame(1080, $packedBox->getUsedWidth());
         self::assertSame($xs, array_map(static fn (PackedItem $item) => $item->x, iterator_to_array($packedBox->items, false)));
     }
@@ -387,6 +393,131 @@ class AllowedOverhangTest extends TestCase
         // one unit of room on the deck: moved by that one unit
         $oneUnitIn = new PackedItem($angled->item, 999 - $angled->boundingWidth, 200, 0, 1100, 100, 100, 40.0);
         self::assertSame([1, 0], $bounds->centringShift([$plank, $oneUnitIn]));
+    }
+
+    /**
+     * @return array<string, array{list<list<array{0: int, 1: int, 2: int, 3: int}>>, array{0: list<int>, 1: list<int>}, array{0: int, 1: int}, array{0: bool, 1: bool}}>
+     */
+    public static function closingCases(): array
+    {
+        // groups of items [x, y, width, length] on a 1000 × 1000 deck allowing 200 at the sides and at the front and
+        // back; the moves of each group along x and along y, the gaps along each, and whether they are closed
+        return [
+            'nothing' => [[], [[], []], [0, 0], [false, false]],
+            // one part along each axis: moved as centringShift() moves it
+            'no gaps' => [[[[-150, 0, 1150, 1000]]], [[75], [0]], [0, 0], [false, false]],
+            'touching' => [[[[-100, 0, 700, 500]], [[600, 0, 400, 500]]], [[50, 50], [0, 0]], [0, 0], [false, false]],
+            // 600 (cap 90) at its cap at the left and 480 (cap 72) at its cap at the right: the caps do not let the
+            // whole load move, leaving 90 over the left; with the gap of 82 closed, it can move 50, leaving 40 over
+            // each side
+            'closed, still hanging over' => [[[[-90, 0, 600, 500]], [[592, 0, 480, 500]]], [[50, -32], [0, 0]], [82, 0], [true, false]],
+            // 600 (cap 90) at its cap at the front and 300 behind it with a gap of 130: balanced as found, 15 over each
+            // end; closed, wholly on the deck, with gaps of 50 at the front and the back
+            'closed onto the deck' => [[[[0, -90, 500, 600]], [[0, 640, 500, 300]]], [[0, 0], [140, 10]], [0, 130], [false, true]],
+            // the groups in each part move together, whatever the order of the groups
+            'groups in parts' => [[[[0, 640, 500, 300]], [[0, -90, 500, 600]], [[500, 0, 100, 100]]], [[0, 0, 0], [10, 140, 140]], [0, 130], [false, true]],
+            // the gap is not closed where balancing the load as it is already puts it on the deck: a gap of 115 between
+            // two items, moved together by 357
+            'kept: on the deck as it is' => [[[[-15, 0, 100, 100]], [[200, 0, 100, 100]]], [[357, 357], [0, 0]], [115, 0], [false, false]],
+            // nor where closing the gap would not lessen the larger overhang: 40 over the left and a gap of 38 at the
+            // right, balanced to 1 over each side; with the gap of 1 closed, 40 and a gap of 39, the larger still 1
+            'kept: no smaller overhang' => [[[[-40, 0, 600, 500]], [[561, 0, 401, 500]]], [[39, 39], [0, 0]], [1, 0], [false, false]],
+        ];
+    }
+
+    /**
+     * @param list<list<array{0: int, 1: int, 2: int, 3: int}>> $groups
+     * @param array{0: list<int>, 1: list<int>}                 $moves
+     * @param array{0: int, 1: int}                             $gaps
+     * @param array{0: bool, 1: bool}                           $closed
+     */
+    #[DataProvider('closingCases')]
+    public function testClosingMoves(array $groups, array $moves, array $gaps, array $closed): void
+    {
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 200, frontAndBack: 200));
+        $packed = array_map(static fn (array $group): array => array_map(static fn (array $item): PackedItem => new PackedItem(new Test\TestItem('Item', $item[2], $item[3], 100, 1, Rotation::Never), $item[0], $item[1], 0, $item[2], $item[3], 100), $group), $groups);
+
+        [$alongX, $alongY] = $bounds->closingMoves($packed);
+        self::assertSame($moves, [$alongX['moves'], $alongY['moves']]);
+        self::assertSame($gaps, [$alongX['gap'], $alongY['gap']]);
+        self::assertSame($closed, [$alongX['closed'], $alongY['closed']]);
+        // without the gaps closed, each group is moved as centringShift() moves the load
+        $all = array_merge(...$packed);
+        foreach ([$alongX, $alongY] as $axis => $along) {
+            if (!$along['closed'] && $groups !== []) {
+                self::assertSame(array_fill(0, count($groups), $bounds->centringShift($all)[$axis]), $along['moves']);
+            }
+        }
+
+        // once moved, every item is within its caps, and the packing needs no further move
+        $moved = [];
+        foreach ($packed as $index => $group) {
+            $moved[] = array_map(static fn (PackedItem $item) => new PackedItem($item->item, $item->x + $moves[0][$index], $item->y + $moves[1][$index], 0, $item->width, $item->length, 100), $group);
+        }
+        foreach (array_merge(...$moved) as $item) {
+            self::assertTrue($bounds->admitsPackedItem($item));
+        }
+        [$againX, $againY] = $bounds->closingMoves($moved);
+        self::assertSame([array_fill(0, count($groups), 0), array_fill(0, count($groups), 0)], [$againX['moves'], $againY['moves']]);
+    }
+
+    public function testClosingMovesLogsTheParts(): void
+    {
+        // the parts as found, [start, end, move]; without the gaps closed, the whole load as one part
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 200, frontAndBack: 200));
+        $item = static fn (int $x, int $y, int $width, int $length): PackedItem => new PackedItem(new Test\TestItem('Item', $width, $length, 100, 1, Rotation::Never), $x, $y, 0, $width, $length, 100);
+
+        [$alongX, $alongY] = $bounds->closingMoves([[$item(-90, 0, 600, 500)], [$item(592, 0, 480, 500), $item(700, 500, 100, 100)]]);
+        self::assertSame([[-90, 510, 50], [592, 1072, -32]], $alongX['parts']);
+        self::assertSame([[0, 600, 0]], $alongY['parts']);
+    }
+
+    public function testClosingKeepsAngledItemsOnTheDeck(): void
+    {
+        // a plank at its cap over the left, and an angled rod against the right edge of the deck, which it may not
+        // pass: the load cannot move as a whole, but with the gap between them closed it can, onto the deck
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
+        $plank = new PackedItem(new Test\TestItem('Plank', 300, 100, 100, 1, Rotation::Never), -45, 0, 0, 300, 100, 100);
+        $rod = new PackedItem(new Test\TestItem('Rod', 600, 50, 100, 1, Rotation::KeepFlat), 0, 0, 0, 600, 50, 100, 30.0);
+        $rod = new PackedItem($rod->item, 1000 - $rod->boundingWidth, 200, 0, 600, 50, 100, 30.0);
+        self::assertSame([0, 0], $bounds->centringShift([$plank, $rod]));
+
+        [$alongX] = $bounds->closingMoves([[$plank], [$rod]]);
+        self::assertTrue($alongX['closed']);
+        [$plankMove, $rodMove] = $alongX['moves'];
+        $gap = $rod->x - 255;
+        self::assertSame(-$gap, $rodMove - $plankMove);
+        $movedRod = new PackedItem($rod->item, $rod->x + $rodMove, 200, 0, 600, 50, 100, 30.0);
+        self::assertTrue($bounds->admitsPackedItem($movedRod));
+        self::assertGreaterThanOrEqual(0, $plank->x + $plankMove);
+        self::assertSame(intdiv(1000 - 300 - $rod->boundingWidth, 2), $plank->x + $plankMove); // balanced: the odd unit at the right
+    }
+
+    public function testClosingLeavesALoadBeyondItsCapsWhereItIs(): void
+    {
+        // 600 (cap 90) at its cap at the left and 480 (cap 72) one past its cap at the right: centringShift() leaves
+        // such a packing where it is, and so must closing, though closing the gap of 83 would lessen its overhang. A
+        // packing beyond its caps fails an assertion, so they are turned off for this, if they can be (they cannot be
+        // turned on or off if compiled out)
+        $bounds = self::bounds(1000, 1000, new AllowedOverhang(sides: 100, frontAndBack: 100));
+        $item = static fn (int $x, int $width): PackedItem => new PackedItem(new Test\TestItem('Item', $width, 500, 100, 1, Rotation::Never), $x, 0, 0, $width, 500, 100);
+        $assertions = ini_get('zend.assertions');
+        if ($assertions === '1') {
+            ini_set('zend.assertions', '0');
+        }
+        try {
+            [$alongX] = $bounds->closingMoves([[$item(-90, 600)], [$item(593, 480)]]);
+            $shift = $bounds->centringShift([$item(-90, 600), $item(593, 480)]);
+        } finally {
+            if ($assertions === '1') {
+                ini_set('zend.assertions', '1');
+            }
+        }
+
+        self::assertSame([0, 0], $shift);
+        self::assertSame(83, $alongX['gap']);
+        self::assertFalse($alongX['closed']);
+        self::assertSame([0, 0], $alongX['moves']);
     }
 
     public function testStartPositionsHangOverEquallyWhenTheyMust(): void
